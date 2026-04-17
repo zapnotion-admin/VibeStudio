@@ -266,20 +266,6 @@ class MainWindow(QMainWindow):
     # Thread management
     # ----------------------------------------------------------------
 
-    def _start_stream(self, model: str, prompt: str, system: str = "") -> None:
-        self._thread = QThread()
-        self._worker = OllamaStreamWorker(model, prompt, system)
-        self._worker.moveToThread(self._thread)
-        self._thread.started.connect(self._worker.run)
-        self._worker.chunk_ready.connect(self.chat_panel.append_ai_chunk)
-        self._worker.finished.connect(self._on_stream_finished)
-        self._worker.finished.connect(self._thread.quit)
-        self._worker.error_occurred.connect(self._on_stream_error)
-        # [v3.1] start_ai_block BEFORE thread.start() — never inside worker
-        self.chat_panel.start_ai_block()
-        self._thread.start()
-        log(f"[main_window] Stream started model={model}")
-
     def _start_pipeline(self, task: str, file_context: str) -> None:
         self._thread = QThread()
         self._worker = PipelineWorker(task, file_context)

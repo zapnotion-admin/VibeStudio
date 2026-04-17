@@ -1,0 +1,9 @@
+[2026-04-17 20:57:58] [main] VibeStudio starting
+[2026-04-17 20:58:00] [main] Ollama reachable (attempt 1)
+[2026-04-17 20:58:05] [main_window] Initialised
+[2026-04-17 20:58:05] [main] Window shown — entering event loop
+[2026-04-17 21:00:46] [main_window] Stream started model=qwen3-coder
+[2026-04-17 21:02:03] [main_window] Assistant turn saved (237 chars)
+[2026-04-17 21:02:03] [main_window] _cleanup_thread complete
+[2026-04-17 21:02:56] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-17 21:03:17] [main_window] Context files: 4
