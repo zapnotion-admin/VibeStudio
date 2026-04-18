@@ -76,16 +76,16 @@ class ChatPanel(QWidget):
         escaped = self._escape(text)
         html = (
             f'<div style="'
-            f'margin: 10px 4px 4px 4px;'
-            f'padding: 10px 12px;'
+            f'padding: 10px 14px;'
+            f'max-width: 900px;'
+            f'line-height: 1.5;'
             f'background: {PALETTE["user_msg"]};'
             f'border-left: 3px solid {PALETTE["accent2"]};'
-            f'border-radius: 4px;'
+            f'border-radius: 6px;'
             f'">'
-            f'<span style="color:{PALETTE["accent2"]};font-weight:bold;'
-            f'font-size:11px;letter-spacing:1px;">YOU</span>'
-            f'<br><span style="color:{PALETTE["text"]};white-space:pre-wrap;">'
-            f'{escaped}</span>'
+            f'<b style="color:{PALETTE["accent2"]};font-size:11px;letter-spacing:1px;">YOU</b>'
+            f'<br/><br/>'
+            f'<span style="color:{PALETTE["text"]};white-space:pre-wrap;">{escaped}</span>'
             f'</div>'
         )
         self._append_html(html)
@@ -101,14 +101,15 @@ class ChatPanel(QWidget):
         colour = PALETTE["accent"]
         html = (
             f'<div style="'
-            f'margin: 4px 4px 4px 4px;'
-            f'padding: 10px 12px;'
+            f'padding: 10px 14px;'
+            f'max-width: 900px;'
+            f'line-height: 1.5;'
             f'background: {PALETTE["ai_msg"]};'
             f'border-left: 3px solid {colour};'
-            f'border-radius: 4px;'
+            f'border-radius: 6px;'
             f'">'
-            f'<span style="color:{colour};font-weight:bold;'
-            f'font-size:11px;letter-spacing:1px;">{label}</span><br>'
+            f'<b style="color:{colour};font-size:11px;letter-spacing:1px;">{label}</b>'
+            f'<br/><br/>'
         )
         self._append_html(html)
 
@@ -205,11 +206,21 @@ class ChatPanel(QWidget):
         self._display.ensureCursorVisible()
 
     def _append_html(self, html: str) -> None:
-        """Appends raw HTML to the display and scrolls to bottom."""
+        """
+        Appends raw HTML to the display, always starting on a new block.
+        insertBlock() is used before insertHtml() because QTextEdit's
+        insertHtml() inserts at the cursor inline — it never opens a new
+        paragraph on its own. Without insertBlock() first, all messages
+        run together on one line regardless of <p> or <div> tags.
+        """
         cursor = self._display.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._display.setTextCursor(cursor)
+        # Only insert a block if the document already has content —
+        # avoids a blank leading line at the top of a fresh chat.
+        if not self._display.document().isEmpty():
+            cursor.insertBlock()
         cursor.insertHtml(html)
+        self._display.setTextCursor(cursor)
         self._display.verticalScrollBar().setValue(
             self._display.verticalScrollBar().maximum()
         )

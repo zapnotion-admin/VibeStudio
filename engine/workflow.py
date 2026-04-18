@@ -5,11 +5,11 @@ Planner → Coder → Reviewer pipeline.
 Used only in Code Mode when core.context.is_task_prompt() returns True.
 All calls happen inside PipelineWorker (a QThread) — never from the UI thread.
 
-Stage model assignments:
-  Stage 1 (Plan)   — deepseek-reasoner  (or fallback)
-  Stage 2 (Code)   — qwen3-coder        (or fallback)
-  Stage 3 (Review) — qwen3-coder        (reuses already-warmed model)
-  Stage 4 (Retry)  — qwen3-coder        (only if verdict != PASS)
+Stage model assignments (single-model — no VRAM swap):
+  Stage 1 (Plan)   — qwen3-coder  (or fallback)
+  Stage 2 (Code)   — qwen3-coder  (same model, already warm)
+  Stage 3 (Review) — qwen3-coder  (same model, already warm)
+  Stage 4 (Retry)  — qwen3-coder  (only if verdict != PASS)
 
 [v3.2] cancel_check: callable injected by PipelineWorker, checked before
 every stage transition. Returns True when the user has hit [Stop].
@@ -19,8 +19,8 @@ import re
 from engine.ollama_client import single_response, ensure_model, resolve_model
 from engine.logger import log
 from core.config import (
-    MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK,
-    MAX_CTX_CODER, MAX_CTX_REASONER,
+    MODEL_CODER, MODEL_FALLBACK,
+    MAX_CTX_CODER,
 )
 
 CONSTRAINTS = """
@@ -94,20 +94,20 @@ def run_pipeline(
     def is_cancelled() -> bool:
         return cancel_check is not None and cancel_check()
 
-    # Resolve both models up front — guard against missing custom models.
-    # resolve_model() checks /api/tags and falls back to qwen3:14b if needed.
-    reasoner = resolve_model(MODEL_REASONER, MODEL_FALLBACK)
-    coder    = resolve_model(MODEL_CODER,    MODEL_FALLBACK)
+    # [perf] Single-model pipeline — one model for all stages.
+    # Eliminates the VRAM thrash from swapping DeepSeek ↔ Qwen3 mid-pipeline.
+    # Qwen3 14B handles planning just fine at 4k context.
+    coder = resolve_model(MODEL_CODER, MODEL_FALLBACK)
 
     # ------------------------------------------------------------------
-    # STAGE 1: PLAN — DeepSeek-R1 analyses the task and produces a plan
+    # STAGE 1: PLAN — Qwen3 analyses and plans (no model swap needed)
     # ------------------------------------------------------------------
     if is_cancelled():
         log("[pipeline] Cancelled before Stage 1")
         return {}
 
-    emit("status", "🧠 Planning with DeepSeek-R1...")
-    ensure_model(reasoner)
+    emit("status", "🧠 Planning...")
+    ensure_model(coder)
 
     files_section = "FILES:\n" + file_context if file_context else "No files provided."
     plan_prompt = f"""
@@ -123,7 +123,7 @@ Produce:
 Be precise. Another AI will execute this plan literally.
 """.strip()
 
-    plan = single_response(reasoner, plan_prompt, num_ctx=MAX_CTX_REASONER)
+    plan = single_response(coder, plan_prompt, num_ctx=MAX_CTX_CODER)
     emit("plan_done", plan)
 
     # ------------------------------------------------------------------
@@ -133,8 +133,7 @@ Be precise. Another AI will execute this plan literally.
         log("[pipeline] Cancelled before Stage 2")
         return {}
 
-    emit("status", "⚙️ Writing code with Qwen3...")
-    ensure_model(coder)  # Unloads DeepSeek, loads Qwen3 (cache handles no-op if same)
+    emit("status", "⚙️ Writing code...")
 
     files_section_optional = "FILES:\n" + file_context if file_context else ""
     code_prompt = f"""

@@ -35,3 +35,81 @@
 [2026-04-17 21:58:23] [main_window] Stream started model=qwen3-coder
 [2026-04-17 21:59:32] [main_window] Assistant turn saved (1577 chars)
 [2026-04-17 21:59:32] [main_window] _cleanup_thread complete
+[2026-04-18 14:11:43] [main] VibeStudio starting
+[2026-04-18 14:11:45] [main] Ollama reachable (attempt 1)
+[2026-04-18 14:11:51] [main_window] Initialised
+[2026-04-18 14:11:51] [main] Window shown — entering event loop
+[2026-04-18 14:15:08] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:15:18] [main_window] Assistant turn saved (364 chars)
+[2026-04-18 14:15:18] [main_window] _cleanup_thread complete
+[2026-04-18 14:16:28] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:16:37] [main_window] Assistant turn saved (422 chars)
+[2026-04-18 14:16:37] [main_window] _cleanup_thread complete
+[2026-04-18 14:18:14] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:18:24] [main_window] Assistant turn saved (714 chars)
+[2026-04-18 14:18:24] [main_window] _cleanup_thread complete
+[2026-04-18 14:19:51] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:20:04] [main_window] Assistant turn saved (668 chars)
+[2026-04-18 14:20:04] [main_window] _cleanup_thread complete
+[2026-04-18 14:35:23] [main] VibeStudio starting
+[2026-04-18 14:35:25] [main] Ollama reachable (attempt 1)
+[2026-04-18 14:35:29] [main_window] Initialised
+[2026-04-18 14:35:29] [main] Window shown — entering event loop
+[2026-04-18 14:36:31] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:36:40] [main_window] Assistant turn saved (160 chars)
+[2026-04-18 14:36:40] [main_window] _cleanup_thread complete
+[2026-04-18 14:36:42] [unload_model] VRAM released
+[2026-04-18 14:37:33] [unload_model] VRAM released
+[2026-04-18 14:37:39] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:37:51] [main_window] Assistant turn saved (581 chars)
+[2026-04-18 14:37:51] [main_window] _cleanup_thread complete
+[2026-04-18 14:37:53] [unload_model] VRAM released
+[2026-04-18 14:38:41] [unload_model] VRAM released
+[2026-04-18 14:39:43] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:39:54] [main_window] Assistant turn saved (878 chars)
+[2026-04-18 14:39:54] [main_window] _cleanup_thread complete
+[2026-04-18 14:39:56] [unload_model] VRAM released
+[2026-04-18 14:40:45] [unload_model] VRAM released
+[2026-04-18 14:45:01] [main] VibeStudio starting
+[2026-04-18 14:45:03] [main] Ollama reachable (attempt 1)
+[2026-04-18 14:45:06] [main_window] Initialised
+[2026-04-18 14:45:06] [main] Window shown — entering event loop
+[2026-04-18 14:45:39] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:45:48] [main_window] Assistant turn saved (248 chars)
+[2026-04-18 14:45:48] [main_window] _cleanup_thread complete
+[2026-04-18 14:45:50] [unload_model] VRAM released
+[2026-04-18 14:46:41] [unload_model] VRAM released
+[2026-04-18 14:46:41] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:46:52] [main_window] Assistant turn saved (265 chars)
+[2026-04-18 14:46:52] [main_window] _cleanup_thread complete
+[2026-04-18 14:46:54] [unload_model] VRAM released
+[2026-04-18 14:47:43] [unload_model] VRAM released
+[2026-04-18 14:50:47] [main] VibeStudio starting
+[2026-04-18 14:50:49] [main] Ollama reachable (attempt 1)
+[2026-04-18 14:50:52] [main_window] Initialised
+[2026-04-18 14:50:52] [main] Window shown — entering event loop
+[2026-04-18 14:52:22] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:52:29] [main_window] Assistant turn saved (3 chars)
+[2026-04-18 14:52:29] [main_window] _cleanup_thread complete
+[2026-04-18 14:52:31] [unload_model] VRAM released
+[2026-04-18 14:52:59] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:53:07] [main_window] Assistant turn saved (58 chars)
+[2026-04-18 14:53:07] [main_window] _cleanup_thread complete
+[2026-04-18 14:53:09] [unload_model] VRAM released
+[2026-04-18 14:53:39] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:53:54] [main_window] Assistant turn saved (733 chars)
+[2026-04-18 14:53:54] [main_window] _cleanup_thread complete
+[2026-04-18 14:53:56] [unload_model] VRAM released
+[2026-04-18 14:54:41] [unload_model] VRAM released
+[2026-04-18 14:56:48] [main] VibeStudio starting
+[2026-04-18 14:56:50] [main] Ollama reachable (attempt 1)
+[2026-04-18 14:56:53] [main_window] Initialised
+[2026-04-18 14:56:54] [main] Window shown — entering event loop
+[2026-04-18 14:57:12] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:57:21] [main_window] Assistant turn saved (127 chars)
+[2026-04-18 14:57:21] [main_window] _cleanup_thread complete
+[2026-04-18 14:57:23] [unload_model] VRAM released
+[2026-04-18 14:57:37] [main_window] Stream started model=qwen3-coder
+[2026-04-18 14:57:44] [main_window] Assistant turn saved (184 chars)
+[2026-04-18 14:57:44] [main_window] _cleanup_thread complete
+[2026-04-18 14:57:46] [unload_model] VRAM released

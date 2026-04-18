@@ -13,7 +13,7 @@ Rules enforced here:
 
 import json
 import requests
-from core.config import OLLAMA_URL, MAX_CTX_CODER
+from core.config import OLLAMA_URL, MAX_CTX_CODER, OLLAMA_NUM_THREAD
 from engine.logger import log
 
 # ---------------------------------------------------------------------------
@@ -110,6 +110,7 @@ def stream_response(
         "options": {
             "num_ctx": num_ctx,
             "temperature": 0.6,
+            "num_thread": OLLAMA_NUM_THREAD,   # [perf] cap CPU threads
         },
     }
     log(f"[stream_response] model={model} ctx={num_ctx} prompt_len={len(prompt)}")
@@ -143,7 +144,10 @@ def single_response(
         "prompt": prompt,
         "system": system,
         "stream": False,
-        "options": {"num_ctx": num_ctx},
+        "options": {
+            "num_ctx": num_ctx,
+            "num_thread": OLLAMA_NUM_THREAD,   # [perf] cap CPU threads
+        },
     }
     log(f"[single_response] model={model} ctx={num_ctx} prompt_len={len(prompt)}")
     resp = safe_generate(f"{OLLAMA_URL}/api/generate", payload, stream=False)
@@ -162,6 +166,26 @@ def list_local_models() -> list[str]:
         return [m["name"] for m in resp.json().get("models", [])]
     except Exception:
         return []
+
+
+def unload_model() -> None:
+    """
+    Forces Ollama to evict the currently loaded model from VRAM immediately.
+    Called after every stream or pipeline completes.
+    On a 16GB GPU this is critical — without it the model sits in VRAM
+    indefinitely, starving the OS, browser, and compositor.
+    Non-fatal: logs failure but never raises.
+    """
+    try:
+        # Setting keep_alive=0 on an empty prompt triggers immediate unload
+        requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={"model": _last_warmed_model or "", "keep_alive": 0},
+            timeout=5,
+        )
+        log("[unload_model] VRAM released")
+    except Exception as e:
+        log(f"[unload_model] Warning (non-fatal): {e}")
 
 
 def is_ollama_running() -> bool:

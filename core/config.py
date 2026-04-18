@@ -13,12 +13,15 @@ MODEL_CODER    = "qwen3-coder"        # Qwen3 14B — writes code
 MODEL_REASONER = "deepseek-reasoner"  # DeepSeek-R1 8B — plans, reasons
 MODEL_FALLBACK = "qwen3:14b"          # Used if custom model hasn't been created yet
 
-# VRAM / context limits
-MAX_CTX_CODER    = 16384
-MAX_CTX_REASONER = 8192
-MAX_FILE_CHARS   = 40_000   # Hard cap on total injected file content per prompt
-MAX_FILES        = 10       # Max files user can add
-MAX_PROMPT_CHARS = 120_000  # Hard cap on total assembled prompt size
+# VRAM / context limits  [perf: reduced from 16384/8192 to stay inside 16GB budget]
+MAX_CTX_CODER    = 4096
+MAX_CTX_REASONER = 4096
+MAX_FILE_CHARS   = 12_000   # Hard cap on total injected file content per prompt
+MAX_FILES        = 5        # Max files user can add at once
+MAX_PROMPT_CHARS = 24_000   # Hard cap on total assembled prompt size
+
+# CPU thread cap for Ollama inference [perf: prevents starving the rest of the OS]
+OLLAMA_NUM_THREAD = 4
 
 # UI Palette — dark theme
 PALETTE = {

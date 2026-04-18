@@ -63,12 +63,17 @@ class OllamaStreamWorker(QObject):
     def run(self) -> None:
         try:
             from engine.ollama_client import safe_generate, OLLAMA_URL
+            from core.config import OLLAMA_NUM_THREAD
             payload = {
                 "model":   self.model,
                 "prompt":  self.prompt,
                 "system":  self.system,
                 "stream":  True,
-                "options": {"num_ctx": self.num_ctx, "temperature": 0.6},
+                "options": {
+                    "num_ctx": self.num_ctx,
+                    "temperature": 0.6,
+                    "num_thread": OLLAMA_NUM_THREAD,  # [perf] cap CPU threads
+                },
             }
             self._response = safe_generate(
                 f"{OLLAMA_URL}/api/generate", payload, stream=True
@@ -159,6 +164,15 @@ class MainWindow(QMainWindow):
         # ── startup Ollama check ─────────────────────────────────────
         self._check_ollama_status()
 
+        # [perf] Idle VRAM release — unloads model after 60s of inactivity.
+        # Keeps the system responsive when VibeStudio is open but not in use.
+        from PySide6.QtCore import QTimer
+        from engine.ollama_client import unload_model
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setInterval(60_000)   # 60 seconds
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(unload_model)
+
         log("[main_window] Initialised")
 
     # ----------------------------------------------------------------
@@ -226,6 +240,9 @@ class MainWindow(QMainWindow):
     def _handle_send(self, text: str) -> None:
         if not text.strip():
             return
+
+        # [perf] Reset idle unload timer — user is active, keep model warm
+        self._idle_timer.start()
 
         self._messages.append({"role": "user", "content": text})
         self.chat_panel.add_user_message(text)
@@ -312,6 +329,9 @@ class MainWindow(QMainWindow):
             pass  # response text tracked via _current_response
         self._finalise_assistant_turn()
         self._cleanup_thread()
+        # [perf] Free VRAM immediately — don't leave model resident between turns
+        from engine.ollama_client import unload_model
+        unload_model()
 
     def _on_pipeline_finished(self) -> None:
         """Pipeline completed (all stages done or cancelled)."""
@@ -319,6 +339,9 @@ class MainWindow(QMainWindow):
         from core.session import autosave
         autosave(self._messages, self._context_files, self._project_dir)
         self._cleanup_thread()
+        # [perf] Free VRAM immediately after pipeline completes
+        from engine.ollama_client import unload_model
+        unload_model()
         log("[main_window] Pipeline finished")
 
     def _on_pipeline_progress(self, stage: str, text: str) -> None:
