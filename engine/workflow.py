@@ -109,10 +109,11 @@ def run_pipeline(
     emit("status", "🧠 Planning with DeepSeek-R1...")
     ensure_model(reasoner)
 
+    files_section = "FILES:\n" + file_context if file_context else "No files provided."
     plan_prompt = f"""
 TASK: {task}
 {CONSTRAINTS}
-{"FILES:\n" + file_context if file_context else "No files provided."}
+{files_section}
 
 Produce:
 1. Analysis of the task (2-4 sentences)
@@ -135,12 +136,13 @@ Be precise. Another AI will execute this plan literally.
     emit("status", "⚙️ Writing code with Qwen3...")
     ensure_model(coder)  # Unloads DeepSeek, loads Qwen3 (cache handles no-op if same)
 
+    files_section_optional = "FILES:\n" + file_context if file_context else ""
     code_prompt = f"""
 TASK: {task}
 {CONSTRAINTS}
 PLAN TO EXECUTE:
 {plan}
-{"FILES:\n" + file_context if file_context else ""}
+{files_section_optional}
 
 Execute the plan exactly. For each changed file:
 1. State the filename

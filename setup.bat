@@ -97,16 +97,16 @@ echo [3/9] Setting VRAM environment variables...
 setx OLLAMA_GPU_OVERHEAD    2147483648 >nul
 setx OLLAMA_MAX_LOADED_MODELS 1        >nul
 setx OLLAMA_NUM_PARALLEL    1          >nul
-setx OLLAMA_KEEP_ALIVE      10m        >nul
+setx OLLAMA_KEEP_ALIVE      30s        >nul
 setx OLLAMA_FLASH_ATTENTION 1          >nul
-setx OLLAMA_KV_CACHE_TYPE   q8_0       >nul
+setx OLLAMA_KV_CACHE_TYPE   q4_0       >nul
 
 set OLLAMA_GPU_OVERHEAD=2147483648
 set OLLAMA_MAX_LOADED_MODELS=1
 set OLLAMA_NUM_PARALLEL=1
-set OLLAMA_KEEP_ALIVE=10m
+set OLLAMA_KEEP_ALIVE=30s
 set OLLAMA_FLASH_ATTENTION=1
-set OLLAMA_KV_CACHE_TYPE=q8_0
+set OLLAMA_KV_CACHE_TYPE=q4_0
 
 echo  [OK] VRAM vars set.
 
@@ -170,10 +170,11 @@ echo setup_dir = os.environ.get^('SETUP_DIR_PY', r'!SETUP_DIR!'^)
 echo.
 echo coder_content = ^(
 echo     'FROM qwen3:14b\n'
-echo     'PARAMETER num_ctx 16384\n'
-echo     'PARAMETER temperature 0.6\n'
-echo     'PARAMETER top_p 0.95\n'
-echo     'PARAMETER num_gpu 99\n'
+echo     'PARAMETER num_ctx 8192\n'
+echo     'PARAMETER num_batch 256\n'
+echo     'PARAMETER temperature 0.5\n'
+echo     'PARAMETER top_p 0.9\n'
+echo     'PARAMETER num_gpu 80\n'
 echo     'SYSTEM """You are an expert software engineer. You write complete, '
 echo     'production-quality code. You make minimal, focused changes to existing code. '
 echo     'You explain what you changed and why. '
@@ -186,8 +187,9 @@ echo.
 echo reasoner_content = ^(
 echo     'FROM deepseek-r1:8b\n'
 echo     'PARAMETER num_ctx 8192\n'
-echo     'PARAMETER temperature 0.6\n'
-echo     'PARAMETER num_gpu 99\n'
+echo     'PARAMETER num_batch 256\n'
+echo     'PARAMETER temperature 0.5\n'
+echo     'PARAMETER num_gpu 80\n'
 echo     'SYSTEM """You are a software architecture and planning specialist. '
 echo     'You analyse tasks, decompose them into clear numbered steps, and identify risks. '
 echo     'You are precise and concise. Your plans are designed to be executed literally '
@@ -270,8 +272,9 @@ echo title VibeStudio
 echo set OLLAMA_GPU_OVERHEAD=2147483648
 echo set OLLAMA_MAX_LOADED_MODELS=1
 echo set OLLAMA_NUM_PARALLEL=1
+echo set OLLAMA_KEEP_ALIVE=30s
 echo set OLLAMA_FLASH_ATTENTION=1
-echo set OLLAMA_KV_CACHE_TYPE=q8_0
+echo set OLLAMA_KV_CACHE_TYPE=q4_0
 echo set "SCRIPT_DIR=%%~dp0"
 echo set "SCRIPT_DIR=!SCRIPT_DIR:~0,-1!"
 echo tasklist ^| findstr /I "ollama.exe" ^>nul

@@ -7,3 +7,31 @@
 [2026-04-17 21:02:03] [main_window] _cleanup_thread complete
 [2026-04-17 21:02:56] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
 [2026-04-17 21:03:17] [main_window] Context files: 4
+[2026-04-17 21:31:46] [main] VibeStudio starting
+[2026-04-17 21:31:49] [main] Ollama reachable (attempt 1)
+[2026-04-17 21:31:52] [main_window] Initialised
+[2026-04-17 21:31:52] [main] Window shown — entering event loop
+[2026-04-17 21:34:14] [main_window] Stream started model=qwen3-coder
+[2026-04-17 21:34:57] [main_window] Assistant turn saved (227 chars)
+[2026-04-17 21:34:57] [main_window] _cleanup_thread complete
+[2026-04-17 21:35:23] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-17 21:35:31] [main_window] Context files: 4
+[2026-04-17 21:36:56] [main_window] Pipeline started
+[2026-04-17 21:36:56] [main_window] _cleanup_thread complete
+[2026-04-17 21:36:56] [main_window] Stream error: f-string expression part cannot include a backslash (workflow.py, line 123)
+[2026-04-17 21:36:56] [main_window] _cleanup_thread complete
+[2026-04-17 21:36:56] [main_window] Pipeline finished
+[2026-04-17 21:37:28] [main_window] Pipeline started
+[2026-04-17 21:37:28] [main_window] _cleanup_thread complete
+[2026-04-17 21:37:28] [main_window] Stream error: f-string expression part cannot include a backslash (workflow.py, line 123)
+[2026-04-17 21:37:28] [main_window] _cleanup_thread complete
+[2026-04-17 21:37:28] [main_window] Pipeline finished
+[2026-04-17 21:57:05] [main] VibeStudio starting
+[2026-04-17 21:57:07] [main] Ollama reachable (attempt 1)
+[2026-04-17 21:57:10] [main_window] Initialised
+[2026-04-17 21:57:10] [main] Window shown — entering event loop
+[2026-04-17 21:57:23] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-17 21:57:34] [main_window] Context files: 5
+[2026-04-17 21:58:23] [main_window] Stream started model=qwen3-coder
+[2026-04-17 21:59:32] [main_window] Assistant turn saved (1577 chars)
+[2026-04-17 21:59:32] [main_window] _cleanup_thread complete
