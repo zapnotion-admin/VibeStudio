@@ -319,7 +319,7 @@ class MainWindow(QMainWindow):
         self.chat_panel.end_ai_block()
         # Capture the streamed text from the display for history
         # (we store the plain-text version — good enough for context)
-        full_text = self.chat_panel._display.toPlainText()
+        # Response text is captured via _stream_buffer in _on_chunk / _finalise_assistant_turn
         # Append last assistant response to history
         # We approximate by using whatever was streamed
         if self._messages and self._messages[-1]["role"] == "user":

@@ -1,31 +1,37 @@
 """
-ui/chat_panel.py
-Chat display widget. A styled, read-only QTextEdit that renders HTML
-message blocks and streams AI output via a 40ms QTimer buffer.
+ui/chat_panel.py  — v9 widget-based message renderer
 
-Streaming lifecycle rules (spec §chat_panel, v3.1/v3.2):
-  - start_ai_block() MUST be called BEFORE the worker thread starts
-    (called from MainWindow._start_stream, never from inside a worker)
-  - end_ai_block() MUST be called ONLY from _on_stream_finished
-    (never from inside a worker)
-  - append_ai_chunk() buffers chunks; _flush_buffer() fires every 40ms
-  - end_ai_block() flushes remaining buffer before closing the block
+Each message is a self-contained QFrame in a QVBoxLayout inside a QScrollArea.
+Content areas use read-only QTextEdit so text selection and Ctrl+C work
+natively — QLabel blocks mouse events in scroll areas and can't be selected.
+
+Public API (unchanged from v8 — main_window.py needs no edits):
+    add_user_message(text)
+    start_ai_block(label)
+    append_ai_chunk(chunk)
+    end_ai_block()
+    add_system_message(text, level)
+    add_stage_header(stage)
+    clear_chat()
 """
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QTextEdit
-from PySide6.QtCore    import Qt, QTimer
-from PySide6.QtGui     import QTextCursor
-from core.config       import PALETTE
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QScrollArea, QFrame,
+    QLabel, QSizePolicy, QPushButton, QHBoxLayout, QTextEdit,
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui  import QGuiApplication, QTextOption
+from core.config    import PALETTE
 
-# Stage header colours (pipeline display contract)
+# ── colour maps ─────────────────────────────────────────────────────────────
+
 _STAGE_COLOURS = {
-    "PLAN":   "#22d3ee",   # cyan
-    "CODE":   "#4ade80",   # green
-    "REVIEW": "#fb923c",   # orange
-    "RETRY":  "#f87171",   # red
+    "PLAN":   "#22d3ee",
+    "CODE":   "#4ade80",
+    "REVIEW": "#fb923c",
+    "RETRY":  "#f87171",
 }
 
-# System message level colours
 _LEVEL_COLOURS = {
     "info": PALETTE["text_dim"],
     "ok":   PALETTE["accent"],
@@ -33,205 +39,346 @@ _LEVEL_COLOURS = {
     "err":  PALETTE["err"],
 }
 
+# ── shared helpers ───────────────────────────────────────────────────────────
+
+def _make_content_edit(bg: str) -> QTextEdit:
+    """
+    Read-only QTextEdit used for all message content.
+    - Supports mouse selection, Ctrl+C, and right-click copy natively.
+    - No scrollbar (height expands to content via document height).
+    - No border, transparent background so the parent QFrame shows through.
+    """
+    te = QTextEdit()
+    # setReadOnly(True) silently kills text selection in some PySide6 builds.
+    # Explicitly set only the flags we want: select + copy, no editing.
+    te.setTextInteractionFlags(
+        Qt.TextInteractionFlag.TextSelectableByMouse |
+        Qt.TextInteractionFlag.TextSelectableByKeyboard
+    )
+    te.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+    te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    te.setFrameShape(QFrame.Shape.NoFrame)
+    te.setStyleSheet(
+        f"QTextEdit {{"
+        f"  background: {bg};"
+        f"  color: {PALETTE['text']};"
+        f"  border: none;"
+        f"  font-size: 13px;"
+        f"  line-height: 1.5;"
+        f"  padding: 0px;"
+        f"  selection-background-color: #3a5a8a;"
+        f"  selection-color: #ffffff;"
+        f"}}"
+    )
+    te.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+    # ClickFocus lets the widget receive mouse press events inside a QScrollArea,
+    # which would otherwise intercept them for scrolling before they reach us.
+    te.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+    # Auto-resize height to content
+    te.document().contentsChanged.connect(lambda: _fit_height(te))
+    return te
+
+
+def _fit_height(te: QTextEdit) -> None:
+    """Resize QTextEdit to its document height so no internal scrollbar appears."""
+    doc_h = int(te.document().size().height())
+    h = max(doc_h + 4, 24)
+    te.setMinimumHeight(h)
+    te.setMaximumHeight(h)
+    # Force parent frames to reflow so the QTextEdit never overflows its
+    # clipping rect (which would make it unclickable / unselectable).
+    p = te.parent()
+    while p is not None:
+        p.adjustSize()
+        p = p.parent() if hasattr(p, 'parent') else None
+
+
+def _copy_btn(get_text) -> QPushButton:
+    """Returns a small styled copy button that calls get_text() on click."""
+    btn = QPushButton("copy")
+    btn.setFixedHeight(20)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setStyleSheet(f"""
+        QPushButton {{
+            color: {PALETTE['text_dim']};
+            background: transparent;
+            border: 1px solid {PALETTE['border']};
+            border-radius: 3px;
+            font-size: 10px;
+            padding: 0 6px;
+        }}
+        QPushButton:hover {{
+            color: {PALETTE['text']};
+            border-color: {PALETTE['accent']};
+        }}
+    """)
+
+    def _do_copy():
+        QGuiApplication.clipboard().setText(get_text())
+        btn.setText("✓")
+        QTimer.singleShot(1500, lambda: btn.setText("copy"))
+
+    btn.clicked.connect(_do_copy)
+    return btn
+
+
+def _label_widget(text: str, colour: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"color:{colour}; font-weight:bold; font-size:11px; "
+        f"letter-spacing:1px; background:transparent; border:none;"
+    )
+    return lbl
+
+
+# ── message widgets ──────────────────────────────────────────────────────────
+
+class _MessageWidget(QFrame):
+    """Completed (non-streaming) message bubble — user or finalised AI."""
+
+    def __init__(self, label: str, label_colour: str,
+                 border_colour: str, bg_colour: str, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self._bg = bg_colour
+        self.setStyleSheet(
+            f"QFrame {{ background:{bg_colour}; border-left:3px solid {border_colour};"
+            f" border-radius:6px; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
+
+        # label row
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(_label_widget(label, label_colour))
+        row.addStretch()
+        self._content_edit = _make_content_edit(bg_colour)
+        row.addWidget(_copy_btn(lambda: self._content_edit.toPlainText()))
+        layout.addLayout(row)
+
+        layout.addWidget(self._content_edit)
+
+    def set_text(self, text: str) -> None:
+        self._content_edit.setPlainText(text)
+
+
+class _StreamingWidget(QFrame):
+    """
+    Live AI response widget. Chunks stream into a read-only QTextEdit.
+    The 40ms timer batches screen updates to avoid per-token repaints.
+    finish() is called by end_ai_block() to flush and stop the timer.
+    """
+
+    def __init__(self, label: str, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        colour = PALETTE["accent"]
+        bg     = PALETTE["ai_msg"]
+        self.setStyleSheet(
+            f"QFrame {{ background:{bg}; border-left:3px solid {colour};"
+            f" border-radius:6px; }}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(6)
+
+        # label row
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        row.addWidget(_label_widget(label, colour))
+        row.addStretch()
+        self._edit = _make_content_edit(bg)
+        row.addWidget(_copy_btn(lambda: self._edit.toPlainText()))
+        layout.addLayout(row)
+
+        layout.addWidget(self._edit)
+
+        # streaming state
+        self._buffer: list[str] = []
+        self._full   = ""
+        self._timer  = QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._flush)
+
+    def push_chunk(self, chunk: str) -> None:
+        self._buffer.append(chunk)
+        if not self._timer.isActive():
+            self._timer.start()
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            self._timer.stop()
+            return
+        chunk = "".join(self._buffer)
+        self._buffer.clear()
+        self._full += chunk
+        # Use insertPlainText instead of setPlainText so the document is never
+        # replaced — this preserves any active text selection while streaming.
+        cursor = self._edit.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._edit.setTextCursor(cursor)
+        self._edit.insertPlainText(chunk)
+
+    def finish(self) -> str:
+        self._timer.stop()
+        if self._buffer:
+            chunk = "".join(self._buffer)
+            self._buffer.clear()
+            self._full += chunk
+            cursor = self._edit.textCursor()
+            cursor.movePosition(cursor.MoveOperation.End)
+            self._edit.setTextCursor(cursor)
+            self._edit.insertPlainText(chunk)
+        # Re-assert interaction flags — Qt can silently reset them after document changes
+        self._edit.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse |
+            Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        return self._full
+
+
+class _SystemWidget(QFrame):
+    """Compact italic status line (info / ok / warn / err)."""
+
+    def __init__(self, text: str, colour: str, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet("background:transparent;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 2, 14, 2)
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color:{colour}; font-style:italic; font-size:11px; "
+            f"background:transparent; border:none;"
+        )
+        layout.addWidget(lbl)
+
+
+class _StageWidget(QFrame):
+    """Bold pipeline stage separator."""
+
+    def __init__(self, stage: str, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        colour = _STAGE_COLOURS.get(stage, PALETTE["accent"])
+        self.setStyleSheet(
+            f"background:transparent; border-left:3px solid {colour}; border-radius:2px;"
+        )
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 4, 12, 4)
+        lbl = QLabel(f"── {stage} ──")
+        lbl.setStyleSheet(
+            f"color:{colour}; font-weight:bold; font-size:11px; "
+            f"letter-spacing:2px; background:transparent; border:none;"
+        )
+        layout.addWidget(lbl)
+
+
+class _DividerWidget(QFrame):
+    """Thin horizontal rule between turns."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.HLine)
+        self.setFixedHeight(1)
+        self.setStyleSheet(f"background:{PALETTE['border']}; border:none;")
+
+
+# ── main ChatPanel ───────────────────────────────────────────────────────────
 
 class ChatPanel(QWidget):
-    """
-    Left-to-right, top-to-bottom chat display.
-    All text is appended to a single QTextEdit as raw HTML.
-    Plain-text streaming chunks are inserted at the cursor to avoid
-    full document re-renders on every token.
-    """
+    """Scrollable widget-based chat display."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # ── layout ──────────────────────────────────────────────────
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # ── chat display ────────────────────────────────────────────
-        self._display = QTextEdit()
-        self._display.setReadOnly(True)
-        self._display.setObjectName("chatDisplay")
-        # Ensure line-wrap doesn't create horizontal scrollbar noise
-        self._display.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
-        layout.addWidget(self._display)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # don't intercept mouse clicks
+        self._scroll.viewport().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ border:none; background:{PALETTE['bg']}; }}"
+        )
+        outer.addWidget(self._scroll)
 
-        # ── streaming state ─────────────────────────────────────────
-        self._streaming        = False
-        self._chunk_buffer: list[str] = []
+        self._container = QWidget()
+        self._container.setStyleSheet(f"background:{PALETTE['bg']};")
+        self._layout = QVBoxLayout(self._container)
+        self._layout.setContentsMargins(12, 12, 12, 12)
+        self._layout.setSpacing(8)
+        self._layout.addStretch()
 
-        # 40ms QTimer flush — prevents QTextEdit bottleneck on fast streams
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(40)
-        self._flush_timer.timeout.connect(self._flush_buffer)
+        self._scroll.setWidget(self._container)
+        self._live: _StreamingWidget | None = None
 
-    # ----------------------------------------------------------------
-    # Public API — user & AI messages
-    # ----------------------------------------------------------------
+    # ── public API ───────────────────────────────────────────────────
 
     def add_user_message(self, text: str) -> None:
-        """Appends a styled user message block."""
-        escaped = self._escape(text)
-        html = (
-            f'<div style="'
-            f'padding: 10px 14px;'
-            f'max-width: 900px;'
-            f'line-height: 1.5;'
-            f'background: {PALETTE["user_msg"]};'
-            f'border-left: 3px solid {PALETTE["accent2"]};'
-            f'border-radius: 6px;'
-            f'">'
-            f'<b style="color:{PALETTE["accent2"]};font-size:11px;letter-spacing:1px;">YOU</b>'
-            f'<br/><br/>'
-            f'<span style="color:{PALETTE["text"]};white-space:pre-wrap;">{escaped}</span>'
-            f'</div>'
+        self._add_divider()
+        w = _MessageWidget(
+            label="YOU",
+            label_colour=PALETTE["accent2"],
+            border_colour=PALETTE["accent2"],
+            bg_colour=PALETTE["user_msg"],
         )
-        self._append_html(html)
+        w.set_text(text)
+        self._add_widget(w)
 
     def start_ai_block(self, label: str = "QWEN3") -> None:
-        """
-        Opens a streaming AI response block.
-        MUST be called BEFORE the worker thread starts — from _start_stream()
-        in MainWindow, never from inside the worker.
-        """
-        self._streaming = True
-        self._chunk_buffer.clear()
-        colour = PALETTE["accent"]
-        html = (
-            f'<div style="'
-            f'padding: 10px 14px;'
-            f'max-width: 900px;'
-            f'line-height: 1.5;'
-            f'background: {PALETTE["ai_msg"]};'
-            f'border-left: 3px solid {colour};'
-            f'border-radius: 6px;'
-            f'">'
-            f'<b style="color:{colour};font-size:11px;letter-spacing:1px;">{label}</b>'
-            f'<br/><br/>'
-        )
-        self._append_html(html)
+        self._live = _StreamingWidget(label)
+        self._add_widget(self._live)
 
     def append_ai_chunk(self, chunk: str) -> None:
-        """
-        Buffers an incoming streaming chunk.
-        The 40ms QTimer drains the buffer — never calls insertText per-chunk.
-        Safe to call from a signal connected to a worker in another thread.
-        """
-        self._chunk_buffer.append(chunk)
-        if not self._flush_timer.isActive():
-            self._flush_timer.start()
+        if self._live:
+            self._live.push_chunk(chunk)
 
     def end_ai_block(self) -> None:
-        """
-        Closes the open AI streaming block.
-        MUST be called ONLY from _on_stream_finished — never from inside a worker.
-        Flushes any remaining buffered chunks before closing.
-        """
-        # Stop timer and flush remaining buffer
-        self._flush_timer.stop()
-        self._flush_buffer()
-        self._streaming = False
-        # Close the div opened in start_ai_block
-        self._append_html('</div>')
-        # Scroll to bottom
-        self._display.verticalScrollBar().setValue(
-            self._display.verticalScrollBar().maximum()
-        )
+        if self._live:
+            self._live.finish()
+            self._live = None
+        self._scroll_to_bottom()
 
     def add_system_message(self, text: str, level: str = "info") -> None:
-        """
-        Appends a system/status message in the appropriate colour.
-        Levels: info (dim), ok (green), warn (orange), err (red).
-        Used for pipeline stage status lines and error messages.
-        """
-        colour  = _LEVEL_COLOURS.get(level, PALETTE["text_dim"])
-        escaped = self._escape(text)
-        html = (
-            f'<div style="'
-            f'margin: 2px 4px;'
-            f'padding: 6px 12px;'
-            f'color:{colour};'
-            f'font-style:italic;'
-            f'white-space:pre-wrap;'
-            f'">{escaped}</div>'
-        )
-        self._append_html(html)
+        colour = _LEVEL_COLOURS.get(level, PALETTE["text_dim"])
+        self._add_widget(_SystemWidget(text, colour))
 
     def add_stage_header(self, stage: str) -> None:
-        """
-        Inserts a bold pipeline stage separator (PLAN / CODE / REVIEW / RETRY).
-        Called from MainWindow._on_pipeline_progress before add_system_message.
-        """
-        colour = _STAGE_COLOURS.get(stage, PALETTE["accent"])
-        html = (
-            f'<div style="'
-            f'margin: 10px 4px 2px 4px;'
-            f'padding: 4px 12px;'
-            f'border-left: 3px solid {colour};'
-            f'border-radius: 2px;'
-            f'">'
-            f'<span style="color:{colour};font-weight:bold;'
-            f'font-size:11px;letter-spacing:2px;">── {stage} ──</span>'
-            f'</div>'
-        )
-        self._append_html(html)
+        self._add_widget(_StageWidget(stage))
 
     def clear_chat(self) -> None:
-        """Clears all chat content. Connected to sidebar clear_chat_requested."""
-        self._flush_timer.stop()
-        self._chunk_buffer.clear()
-        self._streaming = False
-        self._display.clear()
+        if self._live:
+            self._live.finish()
+            self._live = None
+        while self._layout.count() > 1:
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
 
-    # ----------------------------------------------------------------
-    # Internal helpers
-    # ----------------------------------------------------------------
+    # ── internal ─────────────────────────────────────────────────────
 
-    def _flush_buffer(self) -> None:
-        """
-        Drains the chunk buffer into the QTextEdit in one insertText call.
-        Fires every 40ms while streaming. Stops the timer when buffer is empty.
-        """
-        if not self._chunk_buffer:
-            self._flush_timer.stop()
-            return
-        text = "".join(self._chunk_buffer)
-        self._chunk_buffer.clear()
-        cursor = self._display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._display.setTextCursor(cursor)
-        cursor.insertText(text)
-        self._display.ensureCursorVisible()
+    def _add_widget(self, w: QWidget) -> None:
+        self._layout.insertWidget(self._layout.count() - 1, w)
+        self._scroll_to_bottom()
 
-    def _append_html(self, html: str) -> None:
-        """
-        Appends raw HTML to the display, always starting on a new block.
-        insertBlock() is used before insertHtml() because QTextEdit's
-        insertHtml() inserts at the cursor inline — it never opens a new
-        paragraph on its own. Without insertBlock() first, all messages
-        run together on one line regardless of <p> or <div> tags.
-        """
-        cursor = self._display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        # Only insert a block if the document already has content —
-        # avoids a blank leading line at the top of a fresh chat.
-        if not self._display.document().isEmpty():
-            cursor.insertBlock()
-        cursor.insertHtml(html)
-        self._display.setTextCursor(cursor)
-        self._display.verticalScrollBar().setValue(
-            self._display.verticalScrollBar().maximum()
-        )
+    def _add_divider(self) -> None:
+        if self._layout.count() > 1:
+            self._layout.insertWidget(self._layout.count() - 1, _DividerWidget())
 
-    @staticmethod
-    def _escape(text: str) -> str:
-        """Minimal HTML escaping for user/system text injected into HTML blocks."""
-        return (
-            text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
+    def _scroll_to_bottom(self) -> None:
+        sb = self._scroll.verticalScrollBar()
+        # Don't fight the user if they're actively scrolling or selecting text
+        if not sb.isSliderDown():
+            QTimer.singleShot(20, lambda: sb.setValue(sb.maximum()))
