@@ -266,3 +266,103 @@
 [2026-04-18 17:07:44] [unload_model] VRAM released
 [2026-04-18 17:07:44] [main_window] Pipeline finished
 [2026-04-18 17:07:53] [unload_model] VRAM released
+[2026-04-18 18:01:04] [main] VibeStudio starting
+[2026-04-18 18:01:06] [main] Ollama reachable (attempt 1)
+[2026-04-18 18:01:09] [main_window] Initialised
+[2026-04-18 18:01:09] [main] Window shown — entering event loop
+[2026-04-18 18:14:08] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-18 18:14:14] [main_window] Context files: 5
+[2026-04-18 18:16:38] [main] VibeStudio starting
+[2026-04-18 18:16:40] [main] Ollama reachable (attempt 1)
+[2026-04-18 18:16:42] [main_window] Initialised
+[2026-04-18 18:16:43] [main] Window shown — entering event loop
+[2026-04-18 18:27:01] [main_window] Stream started model=qwen3-coder
+[2026-04-18 18:27:17] [main_window] Assistant turn saved (40 chars)
+[2026-04-18 18:27:17] [main_window] _cleanup_thread complete
+[2026-04-18 18:27:19] [unload_model] VRAM released
+[2026-04-18 18:28:03] [unload_model] VRAM released
+[2026-04-18 18:28:18] [main_window] Stream started model=qwen3-coder
+[2026-04-18 18:28:41] [main_window] Assistant turn saved (440 chars)
+[2026-04-18 18:28:41] [main_window] _cleanup_thread complete
+[2026-04-18 18:28:43] [unload_model] VRAM released
+[2026-04-18 18:29:12] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio/ui
+[2026-04-18 18:29:20] [unload_model] VRAM released
+[2026-04-18 18:29:25] [main_window] Context files: 1
+[2026-04-18 18:29:48] [main_window] Pipeline started
+[2026-04-18 18:29:50] [resolve_model] 'qwen3-coder' not found locally — falling back to 'qwen3:14b'
+[2026-04-18 18:29:50] [pipeline] stage=status len=13
+[2026-04-18 18:29:50] [ensure_model] Warming up: qwen3:14b
+[2026-04-18 18:30:06] [ensure_model] Ready: qwen3:14b
+[2026-04-18 18:30:06] [single_response] model=qwen3:14b ctx=4096 prompt_len=12589
+[2026-04-18 18:30:45] [pipeline] stage=plan_done len=1949
+[2026-04-18 18:30:45] [pipeline] stage=status len=18
+[2026-04-18 18:30:45] [single_response] model=qwen3:14b ctx=4096 prompt_len=14559
+[2026-04-18 18:30:50] [unload_model] VRAM released
+[2026-04-18 18:31:08] [pipeline] stage=code_done len=2586
+[2026-04-18 18:31:08] [pipeline] stage=status len=14
+[2026-04-18 18:31:08] [single_response] model=qwen3:14b ctx=4096 prompt_len=4929
+[2026-04-18 18:31:42] [pipeline] stage=review_done len=1199
+[2026-04-18 18:31:42] [pipeline] stage=status len=36
+[2026-04-18 18:31:42] [single_response] model=qwen3:14b ctx=4096 prompt_len=5937
+[2026-04-18 18:32:13] [pipeline] stage=retry_done len=2789
+[2026-04-18 18:32:13] [pipeline] completed. verdict=NEEDS_CHANGES
+[2026-04-18 18:32:13] [main_window] _cleanup_thread complete
+[2026-04-18 18:32:15] [unload_model] VRAM released
+[2026-04-18 18:32:15] [main_window] Pipeline finished
+[2026-04-18 18:41:26] [main] VibeStudio starting
+[2026-04-18 18:41:28] [main] Ollama reachable (attempt 1)
+[2026-04-18 18:41:32] [main_window] Initialised
+[2026-04-18 18:41:32] [main] Window shown — entering event loop
+[2026-04-18 18:41:40] [main_window] Stream started model=qwen3-coder
+[2026-04-18 18:42:11] [main_window] Assistant turn saved (117 chars)
+[2026-04-18 18:42:11] [main_window] _cleanup_thread complete
+[2026-04-18 18:42:13] [unload_model] VRAM released
+[2026-04-18 18:42:42] [unload_model] VRAM released
+[2026-04-18 18:43:41] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-18 18:43:47] [main_window] Context files: 5
+[2026-04-18 18:44:12] [main_window] Pipeline started
+[2026-04-18 18:44:14] [resolve_model] 'qwen3-coder' not found locally — falling back to 'qwen3:14b'
+[2026-04-18 18:44:14] [pipeline] stage=status len=13
+[2026-04-18 18:44:14] [ensure_model] Warming up: qwen3:14b
+[2026-04-18 18:44:29] [ensure_model] Ready: qwen3:14b
+[2026-04-18 18:44:29] [single_response] model=qwen3:14b ctx=4096 prompt_len=12468
+[2026-04-18 18:45:08] [pipeline] stage=plan_done len=1723
+[2026-04-18 18:45:08] [pipeline] stage=status len=18
+[2026-04-18 18:45:08] [single_response] model=qwen3:14b ctx=4096 prompt_len=14212
+[2026-04-18 18:45:14] [unload_model] VRAM released
+[2026-04-18 18:45:24] [pipeline] stage=code_done len=1046
+[2026-04-18 18:45:24] [pipeline] stage=status len=14
+[2026-04-18 18:45:24] [single_response] model=qwen3:14b ctx=4096 prompt_len=3150
+[2026-04-18 18:45:52] [pipeline] stage=review_done len=63
+[2026-04-18 18:45:52] [pipeline] completed. verdict=PASS
+[2026-04-18 18:45:52] [main_window] _cleanup_thread complete
+[2026-04-18 18:45:54] [unload_model] VRAM released
+[2026-04-18 18:45:54] [main_window] Pipeline finished
+[2026-04-18 19:03:12] [main] VibeStudio starting
+[2026-04-18 19:03:14] [main] Ollama reachable (attempt 1)
+[2026-04-18 19:03:17] [main_window] Initialised
+[2026-04-18 19:03:17] [main] Window shown — entering event loop
+[2026-04-18 19:03:27] [main_window] Stream started model=qwen3-coder
+[2026-04-18 19:03:47] [main_window] Assistant turn saved (163 chars)
+[2026-04-18 19:03:47] [main_window] _cleanup_thread complete
+[2026-04-18 19:03:49] [unload_model] VRAM released
+[2026-04-18 19:03:56] [main_window] Project: Z:/drive/Tools/LocalVibeStudio/VibeStudio
+[2026-04-18 19:04:01] [main_window] Context files: 5
+[2026-04-18 19:04:23] [main_window] Pipeline started
+[2026-04-18 19:04:25] [resolve_model] 'qwen3-coder' not found locally — falling back to 'qwen3:14b'
+[2026-04-18 19:04:25] [pipeline] stage=status len=13
+[2026-04-18 19:04:25] [ensure_model] Warming up: qwen3:14b
+[2026-04-18 19:04:41] [ensure_model] Ready: qwen3:14b
+[2026-04-18 19:04:41] [single_response] model=qwen3:14b ctx=4096 prompt_len=12584
+[2026-04-18 19:05:18] [pipeline] stage=plan_done len=1131
+[2026-04-18 19:05:18] [pipeline] stage=status len=18
+[2026-04-18 19:05:18] [single_response] model=qwen3:14b ctx=4096 prompt_len=13736
+[2026-04-18 19:05:25] [unload_model] VRAM released
+[2026-04-18 19:05:32] [pipeline] stage=code_done len=696
+[2026-04-18 19:05:32] [pipeline] stage=status len=14
+[2026-04-18 19:05:32] [single_response] model=qwen3:14b ctx=4096 prompt_len=2216
+[2026-04-18 19:06:01] [pipeline] stage=review_done len=539
+[2026-04-18 19:06:01] [pipeline] completed. verdict=PASS
+[2026-04-18 19:06:01] [main_window] _cleanup_thread complete
+[2026-04-18 19:06:03] [unload_model] VRAM released
+[2026-04-18 19:06:03] [main_window] Pipeline finished

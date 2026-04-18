@@ -71,14 +71,9 @@ def _make_content_edit(bg: str) -> QTextEdit:
 
 
 def _fit_height(te: QTextEdit) -> None:
-    """Resize QTextEdit to its document height so no internal scrollbar appears.
-    Uses the widget's actual viewport width so word-wrap is accounted for."""
-    doc = te.document()
-    vw = te.viewport().width() if te.viewport().width() > 20 else te.width()
-    if vw > 20:
-        doc.setTextWidth(vw)
-    doc_h = int(doc.size().height())
-    te.setFixedHeight(max(doc_h + 8, 24))
+    """Resize QTextEdit to its document height so no internal scrollbar appears."""
+    doc_h = int(te.document().size().height())
+    te.setFixedHeight(max(doc_h + 4, 24))
 
 
 def _copy_btn(get_text) -> QPushButton:
@@ -217,7 +212,7 @@ class _StreamingWidget(QFrame):
 
 
 class _SystemWidget(QFrame):
-    """Status / pipeline output — selectable QTextEdit so text can be copied."""
+    """Compact italic status line (info / ok / warn / err)."""
 
     def __init__(self, text: str, colour: str, parent=None):
         super().__init__(parent)
@@ -225,21 +220,13 @@ class _SystemWidget(QFrame):
         self.setStyleSheet("background:transparent;")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 2, 14, 2)
-        te = QTextEdit()
-        te.setReadOnly(True)
-        te.setPlainText(text)
-        te.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
-        te.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        te.setFrameShape(QFrame.Shape.NoFrame)
-        te.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        te.setStyleSheet(
-            f"QTextEdit {{ color:{colour}; font-style:italic; font-size:11px; "
-            f"background:transparent; border:none; padding:0px; }}"
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color:{colour}; font-style:italic; font-size:11px; "
+            f"background:transparent; border:none;"
         )
-        te.document().contentsChanged.connect(lambda: _fit_height(te))
-        _fit_height(te)
-        layout.addWidget(te)
+        layout.addWidget(lbl)
 
 
 class _StageWidget(QFrame):
@@ -260,65 +247,6 @@ class _StageWidget(QFrame):
             f"letter-spacing:2px; background:transparent; border:none;"
         )
         layout.addWidget(lbl)
-
-
-class _PipelineResponseWidget(QFrame):
-    """
-    Single selectable block for the entire pipeline response (PLAN/CODE/REVIEW).
-    All stages are appended into one QTextEdit so the user can select across them.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        bg     = PALETTE["ai_msg"]
-        colour = PALETTE["accent"]
-        self.setStyleSheet(
-            f"QFrame {{ background:{bg}; border-left:3px solid {colour};"
-            f" border-radius:6px; }}"
-        )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(6)
-
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        lbl = QLabel("PIPELINE")
-        lbl.setStyleSheet(
-            f"color:{colour}; font-weight:bold; font-size:11px; "
-            f"letter-spacing:1px; background:transparent; border:none;"
-        )
-        row.addWidget(lbl)
-        row.addStretch()
-        self._edit = _make_content_edit(bg)
-        row.addWidget(_copy_btn(lambda: self._edit.toPlainText()))
-        layout.addLayout(row)
-        layout.addWidget(self._edit)
-
-    def append_stage(self, stage: str, text: str) -> None:
-        colour = _STAGE_COLOURS.get(stage, PALETTE["accent"])
-        cursor = self._edit.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        prefix = "\n\n" if self._edit.toPlainText() else ""
-        cursor.insertHtml(
-            f"{prefix}<span style=\"color:{colour}; font-weight:bold; "
-            f"font-size:11px; letter-spacing:2px;\">── {stage} ──</span><br>"
-        )
-        cursor.movePosition(cursor.MoveOperation.End)
-        cursor.insertText(text)
-        self._edit.setTextCursor(cursor)
-
-    def append_status(self, text: str) -> None:
-        cursor = self._edit.textCursor()
-        cursor.movePosition(cursor.MoveOperation.End)
-        if self._edit.toPlainText():
-            cursor.insertText("\n")
-        cursor.insertHtml(
-            f"<span style=\"color:{PALETTE['text_dim']}; font-style:italic;\">"
-            f"{text}</span><br>"
-        )
-        self._edit.setTextCursor(cursor)
 
 
 class _DividerWidget(QFrame):
@@ -360,31 +288,8 @@ class ChatPanel(QWidget):
 
         self._scroll.setWidget(self._container)
         self._live: _StreamingWidget | None = None
-        self._pipeline: _PipelineResponseWidget | None = None
 
     # ── public API ───────────────────────────────────────────────────
-
-    def start_pipeline_block(self) -> None:
-        """Begin a new pipeline response block (replaces separate stage widgets)."""
-        self._add_divider()
-        self._pipeline = _PipelineResponseWidget()
-        self._add_widget(self._pipeline)
-
-    def append_pipeline_stage(self, stage: str, text: str) -> None:
-        """Add a stage (PLAN/CODE/REVIEW/RETRY) into the current pipeline block."""
-        if self._pipeline:
-            self._pipeline.append_stage(stage, text)
-            self._scroll_to_bottom()
-
-    def append_pipeline_status(self, text: str) -> None:
-        """Add a status line into the current pipeline block."""
-        if self._pipeline:
-            self._pipeline.append_status(text)
-            self._scroll_to_bottom()
-
-    def end_pipeline_block(self) -> None:
-        self._pipeline = None
-        self._scroll_to_bottom()
 
     def add_user_message(self, text: str) -> None:
         self._add_divider()
@@ -422,7 +327,6 @@ class ChatPanel(QWidget):
         if self._live:
             self._live.finish()
             self._live = None
-        self._pipeline = None
         while self._layout.count() > 1:
             item = self._layout.takeAt(0)
             if item.widget():

@@ -335,6 +335,7 @@ class MainWindow(QMainWindow):
 
     def _on_pipeline_finished(self) -> None:
         """Pipeline completed (all stages done or cancelled)."""
+        self.chat_panel.end_pipeline_block()
         self.input_panel.set_sending(False)
         from core.session import autosave
         autosave(self._messages, self._context_files, self._project_dir)
@@ -345,21 +346,16 @@ class MainWindow(QMainWindow):
         log("[main_window] Pipeline finished")
 
     def _on_pipeline_progress(self, stage: str, text: str) -> None:
-        """Routes pipeline stage output to the correct UI action."""
+        """Routes pipeline stage output into a single selectable response block."""
         if stage == "status":
-            self.chat_panel.add_system_message(text)
-        elif stage == "plan_done":
-            self.chat_panel.add_stage_header("PLAN")
-            self.chat_panel.add_system_message(text)
-        elif stage == "code_done":
-            self.chat_panel.add_stage_header("CODE")
-            self.chat_panel.add_system_message(text)
-        elif stage == "review_done":
-            self.chat_panel.add_stage_header("REVIEW")
-            self.chat_panel.add_system_message(text)
-        elif stage == "retry_done":
-            self.chat_panel.add_stage_header("RETRY")
-            self.chat_panel.add_system_message(text)
+            if self.chat_panel._pipeline is None:
+                self.chat_panel.start_pipeline_block()
+            self.chat_panel.append_pipeline_status(text)
+        elif stage in ("plan_done", "code_done", "review_done", "retry_done"):
+            if self.chat_panel._pipeline is None:
+                self.chat_panel.start_pipeline_block()
+            stage_label = stage.replace("_done", "").upper()
+            self.chat_panel.append_pipeline_stage(stage_label, text)
 
     def _on_stream_error(self, error_msg: str) -> None:
         if "stalled" in error_msg.lower() or "timeout" in error_msg.lower():
