@@ -344,6 +344,37 @@ class ChatPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # ── toolbar ──────────────────────────────────────────────────
+        toolbar = QWidget()
+        toolbar.setStyleSheet(
+            f"background:{PALETTE['bg2']}; border-bottom:1px solid {PALETTE['border']};"
+        )
+        tl = QHBoxLayout(toolbar)
+        tl.setContentsMargins(8, 4, 8, 4)
+        tl.setSpacing(6)
+        tl.addStretch()
+        self._copy_all_btn = QPushButton("Copy conversation")
+        self._copy_all_btn.setFixedHeight(24)
+        self._copy_all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._copy_all_btn.setStyleSheet(f"""
+            QPushButton {{
+                color: {PALETTE['text_dim']};
+                background: transparent;
+                border: 1px solid {PALETTE['border']};
+                border-radius: 3px;
+                font-size: 11px;
+                padding: 0 10px;
+            }}
+            QPushButton:hover {{
+                color: {PALETTE['text']};
+                border-color: {PALETTE['accent']};
+            }}
+        """)
+        self._copy_all_btn.clicked.connect(self._copy_all)
+        tl.addWidget(self._copy_all_btn)
+        outer.addWidget(toolbar)
+        # ─────────────────────────────────────────────────────────────
+
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -430,6 +461,58 @@ class ChatPanel(QWidget):
                 item.widget().deleteLater()
 
     # ── internal ─────────────────────────────────────────────────────
+
+    def get_full_transcript(self) -> str:
+        """
+        Walks all message widgets in order and assembles a plain-text
+        transcript of the entire conversation.
+        Each widget contributes its QTextEdit content with a label prefix.
+        """
+        lines = []
+        layout = self._layout
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            if not item:
+                continue
+            w = item.widget()
+            if w is None:
+                continue
+            # Each message widget has one or more QTextEdit children
+            edits = w.findChildren(QTextEdit)
+            if not edits:
+                continue
+            # Determine label from widget type
+            if isinstance(w, _MessageWidget):
+                label = "YOU"
+            elif isinstance(w, _StreamingWidget):
+                label = "AI"
+            elif isinstance(w, _PipelineResponseWidget):
+                label = "PIPELINE"
+            elif isinstance(w, _SystemWidget):
+                label = None  # status lines — include without header
+            else:
+                label = None
+
+            text = "\n".join(te.toPlainText() for te in edits).strip()
+            if not text:
+                continue
+
+            if label:
+                lines.append(f"[{label}]\n{text}")
+            else:
+                lines.append(text)
+
+        return "\n\n".join(lines)
+
+    def _copy_all(self) -> None:
+        transcript = self.get_full_transcript()
+        if transcript:
+            QGuiApplication.clipboard().setText(transcript)
+            self._copy_all_btn.setText("Copied!")
+            QTimer.singleShot(2000, lambda: self._copy_all_btn.setText("Copy conversation"))
+        else:
+            self._copy_all_btn.setText("Nothing to copy")
+            QTimer.singleShot(2000, lambda: self._copy_all_btn.setText("Copy conversation"))
 
     def _add_widget(self, w: QWidget) -> None:
         self._layout.insertWidget(self._layout.count() - 1, w)

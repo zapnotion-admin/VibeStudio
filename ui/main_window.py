@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
             else:
                 from engine.apply_changes import extract_files, write_files
                 task = self._messages[-1]["content"] if self._messages else ""
-                files = extract_files(result["final_code"], task=task)
+                files = extract_files(result["final_code"], task=task, context_files=self._context_files)
 
                 if files:
                     try:

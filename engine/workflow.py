@@ -246,6 +246,12 @@ SUGGESTIONS: (specific improvements, or "None")
 
         emit("status", "🔁 Fixing reviewer issues...")
 
+        # Extract which files were produced in the code stage so we can tell
+        # the retry model exactly what files it must output
+        import re as _re2
+        code_files = _re2.findall(r"FILE:\s*([^\n]+)\n```", code)
+        file_list = "\n".join(f"- FILE: {f.strip()}" for f in code_files) if code_files else "- same files as in the previous code"
+
         retry_prompt = f"""
 The previous code had issues flagged by a reviewer. Produce a complete corrected version.
 
@@ -257,28 +263,35 @@ ORIGINAL PLAN:
 PREVIOUS CODE:
 {code}
 
-Apply all reviewer fixes. Output the COMPLETE corrected file(s) using this STRICT format:
+You MUST output ALL of the following files in their COMPLETE corrected form:
+{file_list}
 
-FILE: relative/path/to/file.py
+Use this STRICT format for EVERY file — no exceptions:
+
+FILE: filename.py
 ```python
-<complete corrected file — no omissions, no partial patches>
+<complete file contents — every line, no omissions>
 ```
 
 Rules:
-- Always use the FILE: line before each code block
-- Always output the COMPLETE file — never partial or diff output
-- No explanations outside the FILE blocks
+- One FILE: block per file listed above
+- Complete file contents only — never partial, never snippets, never diffs
+- No explanations, no commentary outside the FILE blocks
+- If a file needs no changes, output it anyway unchanged
 """.strip()
 
         final_code = single_response(coder, retry_prompt, num_ctx=MAX_CTX_CODER)
         emit("retry_done", final_code)
 
-    # Use the code stage output as final_code if retry didn't produce FILE: blocks
-    # This prevents prose-heavy retry responses from corrupting the write step
+    # Validate retry output — must contain structured FILE: blocks matching the code stage.
+    # If retry only produced prose/snippets, fall back to the code stage output which
+    # we know is complete and correctly formatted.
     if final_code != code:
-        from engine.apply_changes import extract_files
-        if not extract_files(final_code):
-            log("[pipeline] retry output had no FILE: blocks — falling back to code stage output")
+        import re as _re
+        retry_file_count = len(_re.findall(r"FILE:\s*[^\n]+\n```", final_code))
+        code_file_count  = len(_re.findall(r"FILE:\s*[^\n]+\n```", code))
+        if retry_file_count == 0 or retry_file_count < code_file_count:
+            log(f"[pipeline] retry had {retry_file_count} FILE: blocks vs code stage {code_file_count} — falling back")
             final_code = code
 
     log(f"[pipeline] completed. verdict={verdict}")
