@@ -108,10 +108,11 @@ class PipelineWorker(QObject):
     finished       = Signal()
     error_occurred = Signal(str)
 
-    def __init__(self, task: str, file_context: str):
+    def __init__(self, task: str, file_context: str, project_dir: str = ""):
         super().__init__()
         self.task         = task
         self.file_context = file_context
+        self.project_dir  = project_dir
         self._cancelled   = False
         self.result       = {}
 
@@ -129,6 +130,7 @@ class PipelineWorker(QObject):
             self.result = run_pipeline(
                 self.task,
                 self.file_context,
+                project_dir=self.project_dir,
                 progress_callback=callback,
                 cancel_check=lambda: self._cancelled,
             )
@@ -229,6 +231,7 @@ class MainWindow(QMainWindow):
         self.sidebar.session_save_requested.connect(self._on_session_save)
         self.sidebar.clear_chat_requested.connect(self.chat_panel.clear_chat)
         self.sidebar.index_project_requested.connect(self._on_index_project)
+        self.sidebar.edit_brief_requested.connect(self._on_edit_brief)
 
         # InputPanel → MainWindow
         self.input_panel.send_requested.connect(self._handle_send)
@@ -293,7 +296,7 @@ class MainWindow(QMainWindow):
 
     def _start_pipeline(self, task: str, file_context: str) -> None:
         self._thread = QThread()
-        self._worker = PipelineWorker(task, file_context)
+        self._worker = PipelineWorker(task, file_context, self._project_dir)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_pipeline_progress)
@@ -367,6 +370,15 @@ class MainWindow(QMainWindow):
                             )
                             self.chat_panel.add_system_message(
                                 f"Wrote {len(written)} file(s): {names}", level="ok",
+                            )
+                            # Gap 1: update brief with what was just done
+                            from engine.brief import append_run_summary
+                            task_text = self._messages[-1]["content"] if self._messages else task
+                            append_run_summary(
+                                self._project_dir,
+                                task=task_text,
+                                files_written=[f.replace(self._project_dir, "").lstrip("/\\") for f in written],
+                                verdict=result.get("verdict", "PASS"),
                             )
                         else:
                             self.chat_panel.add_system_message(
@@ -470,6 +482,14 @@ class MainWindow(QMainWindow):
         short = path[-40:] if len(path) > 40 else path
         self._status_bar.showMessage(f"Project: {short}")
         log(f"[main_window] Project: {path}")
+        # Auto-create a blank brief if none exists yet
+        from engine.brief import create_default_brief, brief_exists, brief_path
+        if not brief_exists(path):
+            create_default_brief(path)
+            self.chat_panel.add_system_message(
+                f"Created VIBESTUDIO_BRIEF.md in project folder — edit it to give the AI persistent context.",
+                level="info",
+            )
 
     def _on_files_changed(self, files: list) -> None:
         self._context_files = files
@@ -540,6 +560,58 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
     # Startup check
     # ----------------------------------------------------------------
+
+    def _on_edit_brief(self) -> None:
+        """Opens a simple dialog to edit VIBESTUDIO_BRIEF.md."""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QLabel
+        from engine.brief import read_brief, write_brief, brief_path, create_default_brief
+
+        if not self._project_dir:
+            self.chat_panel.add_system_message(
+                "Set a project folder first, then edit the brief.", level="warn"
+            )
+            return
+
+        create_default_brief(self._project_dir)
+        current = read_brief(self._project_dir)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Project Brief")
+        dlg.resize(600, 500)
+
+        layout = QVBoxLayout(dlg)
+
+        lbl = QLabel(
+            "This brief is injected into every pipeline run. "
+            "Use it to tell the AI what the project is, what decisions are final, and what not to change."
+        )
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(f"color: {self._status_bar.palette().text().color().name()}; font-size: 11px; padding: 4px 0;")
+        layout.addWidget(lbl)
+
+        editor = QTextEdit()
+        editor.setPlainText(current)
+        editor.setFont(__import__("PySide6.QtGui", fromlist=["QFont"]).QFont("Consolas", 11))
+        layout.addWidget(editor)
+
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("Save")
+        cancel_btn = QPushButton("Cancel")
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
+
+        def save():
+            if write_brief(self._project_dir, editor.toPlainText()):
+                self.chat_panel.add_system_message("Brief saved.", level="ok")
+            else:
+                self.chat_panel.add_system_message("Failed to save brief.", level="err")
+            dlg.accept()
+
+        save_btn.clicked.connect(save)
+        cancel_btn.clicked.connect(dlg.reject)
+        dlg.exec()
 
     def _check_ollama_status(self) -> None:
         from engine.ollama_client import is_ollama_running

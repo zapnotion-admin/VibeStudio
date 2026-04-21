@@ -18,6 +18,7 @@ VRAM discipline:
 import re
 from engine.ollama_client import single_response, ensure_model, unload_model, resolve_model
 from engine.logger import log
+from engine.brief import read_brief, format_brief_for_prompt
 from core.config import (
     MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK,
     MAX_CTX_CODER, MAX_CTX_REASONER,
@@ -69,6 +70,7 @@ def _swap_to(model: str, display_name: str, emit, cancel_check) -> bool:
 def run_pipeline(
     task: str,
     file_context: str,
+    project_dir: str = "",
     progress_callback=None,
     cancel_check=None,
 ) -> dict:
@@ -95,6 +97,10 @@ def run_pipeline(
 
     files_section = "FILES:\n" + file_context if file_context else "No files provided."
 
+    # Load project brief — gives every stage persistent context across runs
+    brief_content = read_brief(project_dir) if project_dir else ""
+    brief_section = format_brief_for_prompt(brief_content)
+
     # Extract explicit target filename from task if specified
     # e.g. "save it as calculator.py", "save as foo.py", "call it bar.py"
     import re as _re
@@ -120,7 +126,7 @@ def run_pipeline(
 
     scan_prompt = f"""
 TASK: {task}{target_instruction}
-{files_section}
+{brief_section}{files_section}
 
 You are a code scanner. Do NOT write any fixes yet.
 
@@ -129,13 +135,20 @@ Identify:
 2. Any existing bugs, risks, or edge cases in those areas
 3. Dependencies between components that the task will affect
 
+Cross-file consistency checks (do these for every multi-file project):
+- Are all defined functions actually called somewhere? Flag dead code.
+- Do function signatures match how they are called, including framework callback patterns?
+- Are constants, allowed values, or data formats consistent across files?
+  (e.g. if file A validates input to a set of chars, file B must produce only those chars)
+- Are imports consistent with what each file actually uses?
+
 Output structured findings:
-- File: <name>
-- Function/Class: <name>
+- File: <filename>
+- Function/Class: <n>
 - Issue: <description>
 - Relevant lines: <brief quote or line range>
 
-Be precise and concise. A reasoning model will use your findings to form a plan.
+Mark cross-file issues with [CROSS-FILE]. Be precise and concise.
 """.strip()
 
     scan = single_response(coder, scan_prompt, num_ctx=MAX_CTX_CODER)
@@ -151,7 +164,7 @@ Be precise and concise. A reasoning model will use your findings to form a plan.
 
     reason_prompt = f"""
 TASK: {task}{target_instruction}
-{CONSTRAINTS}
+{brief_section}{CONSTRAINTS}
 
 SCAN FINDINGS (from static analysis):
 {scan}
@@ -180,7 +193,7 @@ Be thorough. A coding model will execute your plan literally — ambiguity cause
 
     code_prompt = f"""
 TASK: {task}{target_instruction}
-{CONSTRAINTS}
+{brief_section}{CONSTRAINTS}
 EXECUTION PLAN:
 {plan}
 
@@ -223,11 +236,22 @@ PLAN:
 CODE OUTPUT:
 {code}
 
-Check: correctness, logic errors, style consistency, missing error handling, security issues.
+Check ALL of the following:
+- Correctness: does the code do what the task asks?
+- Logic errors: off-by-one, wrong conditions, incorrect operator precedence
+- Function signatures: does every function definition match exactly how it is called?
+  Pay special attention to callback/handler functions registered with frameworks
+  (e.g. tkinter validatecommand requires specific argument patterns)
+- Dead code: is every defined function actually called somewhere? Flag unused functions.
+- Cross-file consistency: if multiple files are present, do they agree on data formats,
+  allowed values, and interfaces? (e.g. if one file validates input to a set of values,
+  the other file must produce/accept exactly those values)
+- Missing error handling: unhandled exceptions, missing edge cases
+- Security issues: unsafe eval, injection risks, path traversal
 
 Respond in this exact format:
 VERDICT: PASS / NEEDS_CHANGES / FAIL
-ISSUES: (list, or "None")
+ISSUES: (list each issue on its own line, or "None")
 SUGGESTIONS: (specific improvements, or "None")
 """.strip()
 

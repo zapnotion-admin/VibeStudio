@@ -60,6 +60,7 @@ class Sidebar(QWidget):
     session_save_requested  = Signal()
     clear_chat_requested    = Signal()
     index_project_requested = Signal()
+    edit_brief_requested    = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -93,6 +94,7 @@ class Sidebar(QWidget):
         self._build_model_section()
         self._build_rag_section()
         self._build_agent_section()
+        self._build_brief_section()
         self._layout.addStretch()
 
         scroll.setWidget(content)
@@ -238,6 +240,24 @@ class Sidebar(QWidget):
 
     def allow_writes_enabled(self):
         return hasattr(self, "_writes_checkbox") and self._writes_checkbox.isChecked()
+
+    def _build_brief_section(self):
+        self._layout.addWidget(_separator())
+        self._layout.addWidget(_section_label("Project Brief"))
+
+        brief_btn = QPushButton("Edit Brief")
+        brief_btn.setToolTip(
+            "Edit VIBESTUDIO_BRIEF.md — gives the AI persistent context\n"
+            "about your project across all pipeline runs."
+        )
+        brief_btn.clicked.connect(self.edit_brief_requested)
+        self._layout.addWidget(brief_btn)
+
+        info = QLabel("Keeps AI aligned across runs")
+        info.setStyleSheet(
+            "color: {}; font-size: 10px; padding: 0 0 4px 2px;".format(PALETTE["text_dim"])
+        )
+        self._layout.addWidget(info)
 
     def _build_agent_section(self):
         self._layout.addWidget(_separator())

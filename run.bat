@@ -247,7 +247,7 @@ if errorlevel 1 (
 )
 
 echo  Installing packages ^(PySide6, requests, chromadb, rich^)...
-"!VENV_DIR!\Scripts\pip.exe" install --quiet PySide6 requests chromadb rich
+"!VENV_DIR!\Scripts\pip.exe" install --quiet PySide6 requests chromadb rich sympy
 if errorlevel 1 (
     echo  [ERROR] Package installation failed.
     pause
