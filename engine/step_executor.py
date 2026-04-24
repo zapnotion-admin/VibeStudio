@@ -7,14 +7,19 @@ For each step:
   2. Build context: full content for step files, interface-only for others
   3. Generate code for this step only
   4. Parse FILE: blocks from output
-  5. Stage the writes (not committed yet)
-  6. Verify the step (lightweight check)
-  7. On PASS → commit staged files, advance state
-  8. On FAIL → rollback staged, retry once with failure reason
-  9. On second FAIL → skip step, log failure, continue
+  5. Validate that written files match planned files (no invented filenames)
+  6. Stage the writes (not committed yet)
+  7. Verify the step (structural check)
+  8. On PASS → commit staged files, advance state
+  9. On FAIL → rollback staged, retry with explicit failure reason
 
-Never asks the model to hold the whole program in memory.
-Never commits broken code to disk.
+v3 fixes:
+- File invention guard: rejects output that writes to files not in the step plan.
+  This prevents the model from creating rogue files (ensure.js, velocity.js etc)
+  when it should be modifying a specific file.
+- Retry prompt now explicitly lists the EXACT filenames that must be produced.
+- Minimum code length raised to 5 lines.
+- Refusal check fires on parsed code content only.
 """
 
 import os
@@ -33,27 +38,21 @@ from engine.brief import format_brief_for_prompt
 from core.config import MODEL_CODER, MODEL_FALLBACK, MAX_CTX_CODER
 
 
-MAX_RETRIES = 1   # Retry a failed step this many times before skipping
+_RETRIES_STABLE = 2
+_RETRIES_FAST   = 1
 
 
 def run_steps(
     state:             StepState,
     task:              str,
-    all_context_files: list,    # all files the user has in context (filenames)
+    all_context_files: list,
     project_dir:       str,
     brief_content:     str,
-    coder_model:       str = None,  # which model to use for code generation
+    coder_model:       str = None,
+    stable_mode:       bool = True,
     progress_callback  = None,
     cancel_check       = None,
 ) -> dict:
-    """
-    Executes all pending steps in the state machine.
-
-    Returns dict with:
-      completed_files: list of all files written
-      diffs:           list of diff strings per step
-      failed_steps:    list of step numbers that were skipped
-    """
 
     def emit(stage: str, text: str) -> None:
         log(f"[step_executor] {stage}: {text[:80]}")
@@ -67,12 +66,10 @@ def run_steps(
     plan_summary   = extract_plan_summary(state.steps)
     completed_files: list = []
     all_diffs:       list = []
+    max_retries = _RETRIES_STABLE if stable_mode else _RETRIES_FAST
 
-    # Resolve which model to use — default to config
     from engine.ollama_client import resolve_model
-    from core.config import MODEL_FALLBACK
     active_coder = resolve_model(coder_model or MODEL_CODER, MODEL_FALLBACK)
-    # Ensure the coder model is loaded (may need to swap from reasoner)
     ensure_model(active_coder)
 
     while True:
@@ -95,32 +92,30 @@ def run_steps(
         emit("step_start", f"Step {step_num}/{step_total}: {step_desc}")
         state.begin_step(next_idx)
 
-        # ── Determine which files to include ────────────────────────
-        # If step didn't specify files, include all context files
         if not step_files:
             step_files = [os.path.basename(f) for f in all_context_files]
 
-        # All files relevant to this project (for interface-only context)
         all_relevant = list(set(
             [os.path.basename(f) for f in all_context_files] + step_files
         ))
 
+        # Normalised set of allowed output filenames for this step
+        allowed_filenames = {f.lower() for f in step_files}
+
         retry_reason = ""
         success = False
 
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(max_retries + 1):
             if is_cancelled():
                 state.cancel()
                 return _result(completed_files, all_diffs, state)
 
             if attempt > 0:
-                emit("status", f"  ↩ Retrying step {step_num} (attempt {attempt + 1})...")
+                emit("status", f"  ↩ Retrying step {step_num} (attempt {attempt + 1}/{max_retries + 1})...")
                 state.retry_step()
 
-            # ── Read current on-disk state ───────────────────────────
             current_files = read_project_files(project_dir, all_relevant)
 
-            # ── Build context ────────────────────────────────────────
             file_context = build_file_context_for_step(
                 step_files=step_files,
                 all_project_files=current_files,
@@ -128,11 +123,20 @@ def run_steps(
 
             status_summary = steps_to_status_summary(state.steps)
 
-            # ── Build prompt ─────────────────────────────────────────
-            retry_note = (
-                f"\nPREVIOUS ATTEMPT FAILED: {retry_reason}\n"
-                f"Fix that specific issue in this attempt.\n"
-            ) if retry_reason else ""
+            if retry_reason and attempt > 0:
+                retry_note = (
+                    f"\n⚠ PREVIOUS ATTEMPT FAILED\n"
+                    f"Reason: {retry_reason}\n"
+                    f"You MUST fix this specific problem. Do NOT repeat the previous output.\n"
+                )
+            else:
+                retry_note = ""
+
+            sc = step.get("success_criteria", "").strip()
+            success_hint = f"\nSuccess looks like: {sc}\n" if sc else ""
+
+            # Build the exact file list the model MUST output
+            required_files_str = "\n".join(f"  FILE: {f}" for f in step_files)
 
             prompt = f"""
 TASK: {task}
@@ -144,27 +148,27 @@ PROGRESS:
 {status_summary}
 
 {file_context}
-
-{retry_note}
+{retry_note}{success_hint}
 EXECUTE THIS STEP ONLY — Step {step_num} of {step_total}:
 {step_desc}
+
+You MUST output EXACTLY these files — no others:
+{required_files_str}
+
+Output format (one block per file):
+FILE: <filename>
+```<language>
+<complete file contents — every line>
+```
 
 Rules:
 - Only make the changes required by this step
 - Do not implement anything from future steps
 - Do not remove anything added by previous steps
-- Output EVERY modified or created file using this STRICT format:
-
-FILE: filename.py
-```python
-<complete file contents — every line>
-```
-
-- One FILE: block per file you touch
-- Complete file only — no diffs, no snippets, no omissions
+- Output the COMPLETE file — no diffs, no snippets, no omissions
+- Do NOT create files with different names than listed above
 """.strip()
 
-            # ── Generate ─────────────────────────────────────────────
             try:
                 raw_output = single_response(
                     active_coder, prompt, num_ctx=MAX_CTX_CODER
@@ -174,28 +178,40 @@ FILE: filename.py
                 log(f"[step_executor] Generation error: {e}")
                 continue
 
-            # ── Parse FILE: blocks ───────────────────────────────────
             parsed_files = extract_files(raw_output, task=step_desc)
             if not parsed_files:
-                retry_reason = "No FILE: blocks found in output — model may not have followed format"
+                retry_reason = (
+                    "No FILE: blocks found in output. "
+                    f"You MUST output exactly: {', '.join(step_files)} using the FILE: format."
+                )
                 log(f"[step_executor] No files parsed from output")
                 continue
 
-            # ── Stage the writes ──────────────────────────────────────
-            for f in parsed_files:
-                rel_path  = f["path"]
-                full_path = os.path.join(project_dir, rel_path) if project_dir else rel_path
-                state.stage_file(full_path, f["code"])
+            # ── File invention guard ──────────────────────────────────
+            # Reject outputs that write to files not in this step's plan.
+            # This prevents the model from creating new rogue files when
+            # it should be modifying specific existing ones.
+            if allowed_filenames:
+                invented = [
+                    f["path"] for f in parsed_files
+                    if os.path.basename(f["path"]).lower() not in allowed_filenames
+                ]
+                if invented:
+                    retry_reason = (
+                        f"You wrote to unexpected file(s): {', '.join(invented)}. "
+                        f"This step ONLY allows writing to: {', '.join(step_files)}. "
+                        f"Do not create new files — modify only the files listed."
+                    )
+                    log(f"[step_executor] File invention rejected: {invented}")
+                    continue
 
-            # ── Verify the step ───────────────────────────────────────
             verify_result = _verify_step(
-                step_desc   = step_desc,
-                output      = raw_output,
+                step_desc    = step_desc,
+                output       = raw_output,
                 parsed_files = parsed_files,
             )
 
             if verify_result["pass"]:
-                # Compute diffs before committing
                 for f in parsed_files:
                     rel_path  = f["path"]
                     full_path = os.path.join(project_dir, rel_path) if project_dir else rel_path
@@ -204,6 +220,11 @@ FILE: filename.py
                     all_diffs.append(diff)
                     if full_path not in completed_files:
                         completed_files.append(full_path)
+
+                for f in parsed_files:
+                    rel_path  = f["path"]
+                    full_path = os.path.join(project_dir, rel_path) if project_dir else rel_path
+                    state.stage_file(full_path, f["code"])
 
                 state.step_success()
                 names = [f["path"] for f in parsed_files]
@@ -216,37 +237,42 @@ FILE: filename.py
 
         if not success:
             state.step_failed(retry_reason)
-            emit("step_failed", f"✗ Step {step_num} failed after {MAX_RETRIES + 1} attempts — skipping. Reason: {retry_reason}")
+            emit(
+                "step_failed",
+                f"✗ Step {step_num} failed after {max_retries + 1} attempt(s) — skipping. "
+                f"Reason: {retry_reason}"
+            )
 
     return _result(completed_files, all_diffs, state)
 
 
 def _verify_step(step_desc: str, output: str, parsed_files: list) -> dict:
     """
-    Lightweight verification — no model call needed for basic checks.
-    Returns {"pass": bool, "reason": str}
-
-    Checks:
-    - At least one FILE: block was produced
-    - Output isn't suspiciously short (< 5 lines total)
-    - No obvious error markers in the output
+    Structural verification only.
+    1. At least one FILE: block with content
+    2. Code not suspiciously short (< 5 lines)
+    3. Parsed code doesn't contain refusal text
     """
     if not parsed_files:
         return {"pass": False, "reason": "No FILE: blocks in output"}
 
     total_lines = sum(f["code"].count("\n") + 1 for f in parsed_files)
-    if total_lines < 3:
-        return {"pass": False, "reason": f"Output suspiciously short ({total_lines} lines total)"}
+    if total_lines < 5:
+        return {
+            "pass": False,
+            "reason": f"Output too short ({total_lines} lines) — likely incomplete"
+        }
 
-    # Check for common model failure patterns
-    failure_markers = [
-        "i cannot", "i can't", "i'm unable",
-        "error:", "traceback", "syntaxerror",
+    code_concat = "\n".join(f["code"] for f in parsed_files).lower()
+    refusal_markers = [
+        "i cannot complete",
+        "i'm unable to",
+        "i am unable to",
+        "as an ai, i",
     ]
-    output_lower = output.lower()
-    for marker in failure_markers:
-        if marker in output_lower and "FILE:" not in output:
-            return {"pass": False, "reason": f"Output contains failure marker: '{marker}'"}
+    for marker in refusal_markers:
+        if marker in code_concat:
+            return {"pass": False, "reason": f"Code block contains refusal text: '{marker}'"}
 
     return {"pass": True, "reason": ""}
 

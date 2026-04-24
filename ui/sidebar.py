@@ -4,16 +4,24 @@ Left panel with all app controls. Wrapped in a QScrollArea so it
 handles long file lists and small screens gracefully.
 
 Sections (top -> bottom):
-  1. Mode indicator  -- "Chat Mode" / "Code Mode"
+  1. Mode indicator  -- "Chat Mode" / "Code Mode" / "Agent Mode"
   2. Project picker  -- directory selector
   3. Context files   -- file list with add/remove buttons
   4. Sessions        -- save/load/delete named sessions
   5. Model selector  -- QComboBox + VRAM estimate label
-  6. RAG controls    -- only shown when chromadb is available
-  7. Clear Chat      -- bottom utility button
+  6. Execution mode  -- Stable / Fast toggle
+  7. Agent section   -- Write files to disk checkbox
+  8. RAG controls    -- only shown when chromadb is available
+  9. Project Brief   -- Edit Brief button
+  10. Clear Chat     -- bottom utility button
 
 All user actions emit signals only -- no direct state changes.
 MainWindow owns all app state and handles signal responses.
+
+v2 fixes:
+  - Execution mode tooltip clarified: stable = more retries, not "stricter verification"
+  - Stable mode checkbox default reads from config correctly
+  - _on_stable_mode_changed emits correct bool
 """
 
 from pathlib import Path
@@ -25,9 +33,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from core.config import MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK, VRAM_ESTIMATES, PALETTE
+from core.config import MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK, VRAM_ESTIMATES, PALETTE, STABLE_MODE
 
-# Code file extensions recognised when adding a whole folder
 CODE_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".java",
     ".cpp", ".c", ".h", ".cs", ".go", ".rs",
@@ -63,6 +70,7 @@ class Sidebar(QWidget):
     edit_brief_requested    = Signal()
     coder_changed           = Signal(str)
     reasoner_changed        = Signal(str)
+    stable_mode_changed     = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,8 +102,9 @@ class Sidebar(QWidget):
         self._build_sessions_section()
         self._layout.addWidget(_separator())
         self._build_model_section()
-        self._build_rag_section()
+        self._build_execution_mode_section()
         self._build_agent_section()
+        self._build_rag_section()
         self._build_brief_section()
         self._layout.addStretch()
 
@@ -202,7 +211,7 @@ class Sidebar(QWidget):
 
         available = self._get_available_models()
 
-        # Coder model (Scan + Code + Review stages)
+        # Coder model
         coder_label = QLabel("🔧 Coder  (Scan / Code / Review)")
         coder_label.setStyleSheet(
             "color: {}; font-size: 10px; padding: 2px 0 0 0;".format(PALETTE["accent"])
@@ -222,7 +231,7 @@ class Sidebar(QWidget):
         self._layout.addWidget(vram_c)
         self._coder_vram_label = vram_c
 
-        # Reasoner model (Reason stage only)
+        # Reasoner model
         reason_label = QLabel("🧠 Reasoner  (Plan stage)")
         reason_label.setStyleSheet(
             "color: {}; font-size: 10px; padding: 2px 0 0 0;".format(PALETTE["warn"])
@@ -250,55 +259,27 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(note)
 
-    def _build_rag_section(self):
-        from engine.rag import is_available
-        if not is_available():
-            return
-
+    def _build_execution_mode_section(self):
         self._layout.addWidget(_separator())
-        self._layout.addWidget(_section_label("Project Index (RAG)"))
+        self._layout.addWidget(_section_label("Execution Mode"))
 
-        self._rag_checkbox = QCheckBox("Use Project Index")
-        self._rag_checkbox.setToolTip(
-            "Inject semantically relevant code chunks into each prompt"
+        self._stable_radio = QCheckBox("⚡ Stable Mode")
+        self._stable_radio.setChecked(STABLE_MODE)
+        self._stable_radio.setToolTip(
+            "Stable: 2 retries per step — more robust for complex tasks.\n\n"
+            "Fast: 1 retry per step — quicker iterations for simple changes.\n\n"
+            "Both modes use the same verification logic."
         )
-        self._layout.addWidget(self._rag_checkbox)
+        self._stable_radio.stateChanged.connect(self._on_stable_mode_changed)
+        self._layout.addWidget(self._stable_radio)
 
-        index_btn = QPushButton("Index Project")
-        index_btn.setToolTip("Build or rebuild the project index")
-        index_btn.clicked.connect(self.index_project_requested)
-        self._layout.addWidget(index_btn)
-
-    # ----------------------------------------------------------------
-    # Public API
-    # ----------------------------------------------------------------
-
-    def refresh_sessions(self):
-        self._load_sessions()
-
-    def rag_enabled(self):
-        return hasattr(self, "_rag_checkbox") and self._rag_checkbox.isChecked()
-
-    def allow_writes_enabled(self):
-        return hasattr(self, "_writes_checkbox") and self._writes_checkbox.isChecked()
-
-    def _build_brief_section(self):
-        self._layout.addWidget(_separator())
-        self._layout.addWidget(_section_label("Project Brief"))
-
-        brief_btn = QPushButton("Edit Brief")
-        brief_btn.setToolTip(
-            "Edit VIBESTUDIO_BRIEF.md — gives the AI persistent context\n"
-            "about your project across all pipeline runs."
+        self._mode_desc = QLabel(
+            "2 retries/step — robust" if STABLE_MODE else "1 retry/step — fast"
         )
-        brief_btn.clicked.connect(self.edit_brief_requested)
-        self._layout.addWidget(brief_btn)
-
-        info = QLabel("Keeps AI aligned across runs")
-        info.setStyleSheet(
+        self._mode_desc.setStyleSheet(
             "color: {}; font-size: 10px; padding: 0 0 4px 2px;".format(PALETTE["text_dim"])
         )
-        self._layout.addWidget(info)
+        self._layout.addWidget(self._mode_desc)
 
     def _build_agent_section(self):
         self._layout.addWidget(_separator())
@@ -319,30 +300,58 @@ class Sidebar(QWidget):
         )
         self._layout.addWidget(warn)
 
+    def _build_rag_section(self):
+        from engine.rag import is_available
+        if not is_available():
+            return
+
+        self._layout.addWidget(_separator())
+        self._layout.addWidget(_section_label("Project Index (RAG)"))
+
+        self._rag_checkbox = QCheckBox("Use Project Index")
+        self._rag_checkbox.setToolTip(
+            "Inject semantically relevant code chunks into each prompt"
+        )
+        self._layout.addWidget(self._rag_checkbox)
+
+        index_btn = QPushButton("Index Project")
+        index_btn.setToolTip("Build or rebuild the project index")
+        index_btn.clicked.connect(self.index_project_requested)
+        self._layout.addWidget(index_btn)
+
+    def _build_brief_section(self):
+        self._layout.addWidget(_separator())
+        self._layout.addWidget(_section_label("Project Brief"))
+
+        brief_btn = QPushButton("Edit Brief")
+        brief_btn.setToolTip(
+            "Edit ZAPCODEFORGE_BRIEF.md — gives the AI persistent context\n"
+            "about your project across all pipeline runs."
+        )
+        brief_btn.clicked.connect(self.edit_brief_requested)
+        self._layout.addWidget(brief_btn)
+
+        info = QLabel("Keeps AI aligned across runs")
+        info.setStyleSheet(
+            "color: {}; font-size: 10px; padding: 0 0 4px 2px;".format(PALETTE["text_dim"])
+        )
+        self._layout.addWidget(info)
+
     # ----------------------------------------------------------------
-    # Internal helpers
+    # Public API
     # ----------------------------------------------------------------
 
-    def _get_available_models(self) -> list:
-        """Queries Ollama for locally installed models."""
-        try:
-            from engine.ollama_client import list_local_models
-            models = list_local_models()
-            return models if models else [MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK]
-        except Exception:
-            return [MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK]
+    def refresh_sessions(self):
+        self._load_sessions()
 
-    def _on_coder_changed(self, model: str) -> None:
-        if hasattr(self, "_coder_vram_label"):
-            from core.config import VRAM_ESTIMATES
-            self._coder_vram_label.setText(VRAM_ESTIMATES.get(model, ""))
-        self.coder_changed.emit(model)
+    def rag_enabled(self):
+        return hasattr(self, "_rag_checkbox") and self._rag_checkbox.isChecked()
 
-    def _on_reasoner_changed(self, model: str) -> None:
-        if hasattr(self, "_reasoner_vram_label"):
-            from core.config import VRAM_ESTIMATES
-            self._reasoner_vram_label.setText(VRAM_ESTIMATES.get(model, ""))
-        self.reasoner_changed.emit(model)
+    def allow_writes_enabled(self):
+        return hasattr(self, "_writes_checkbox") and self._writes_checkbox.isChecked()
+
+    def stable_mode_enabled(self):
+        return hasattr(self, "_stable_radio") and self._stable_radio.isChecked()
 
     def get_coder_model(self) -> str:
         if hasattr(self, "_coder_combo"):
@@ -354,6 +363,36 @@ class Sidebar(QWidget):
             return self._reasoner_combo.currentText()
         return MODEL_REASONER
 
+    # ----------------------------------------------------------------
+    # Internal helpers
+    # ----------------------------------------------------------------
+
+    def _get_available_models(self) -> list:
+        try:
+            from engine.ollama_client import list_local_models
+            models = list_local_models()
+            return models if models else [MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK]
+        except Exception:
+            return [MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK]
+
+    def _on_stable_mode_changed(self, state: int) -> None:
+        enabled = bool(state)
+        if hasattr(self, "_mode_desc"):
+            self._mode_desc.setText(
+                "2 retries/step — robust" if enabled else "1 retry/step — fast"
+            )
+        self.stable_mode_changed.emit(enabled)
+
+    def _on_coder_changed(self, model: str) -> None:
+        if hasattr(self, "_coder_vram_label"):
+            self._coder_vram_label.setText(VRAM_ESTIMATES.get(model, ""))
+        self.coder_changed.emit(model)
+
+    def _on_reasoner_changed(self, model: str) -> None:
+        if hasattr(self, "_reasoner_vram_label"):
+            self._reasoner_vram_label.setText(VRAM_ESTIMATES.get(model, ""))
+        self.reasoner_changed.emit(model)
+
     def _load_sessions(self):
         from core.session import list_sessions
         self._sessions_list.clear()
@@ -361,7 +400,7 @@ class Sidebar(QWidget):
             self._sessions_list.addItem(name)
 
     def _update_mode(self):
-        writes = hasattr(self, "_writes_checkbox") and self._writes_checkbox.isChecked()
+        writes   = hasattr(self, "_writes_checkbox") and self._writes_checkbox.isChecked()
         has_files = bool(self._context_files)
         if writes and has_files:
             self._mode_label.setText("🤖  Agent Mode")
@@ -464,5 +503,3 @@ class Sidebar(QWidget):
         for item in selected:
             delete_session(item.text())
         self._load_sessions()
-
-

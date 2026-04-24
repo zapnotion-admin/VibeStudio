@@ -1,130 +1,130 @@
 """
 engine/plan_parser.py
-Parses structured step plans from the REASON stage output.
+Parses the structured step plan produced by the REASON stage.
 
-Expected format from the model:
-    STEP 1: Create calculator.py with window and entry widget
-    FILES: calculator.py
-    DEPENDS_ON: none
+Expected format (must match what workflow.py prompts for):
 
-    STEP 2: Add button grid
-    FILES: calculator.py
-    DEPENDS_ON: STEP 1
+STEP 1: <description>
+FILES: <filename>
+DEPENDS_ON: none
+SUCCESS_CRITERIA: <criteria>
 
-Falls back gracefully if the model doesn't follow the format exactly.
+STEP 2: <description>
+FILES: <filename>
+DEPENDS_ON: STEP 1
+SUCCESS_CRITERIA: <criteria>
+
+v2 fixes:
+- SUCCESS_CRITERIA parsing made more robust (handles missing field gracefully)
+- extract_plan_summary now includes success criteria in the summary shown to executor
+- steps_to_status_summary handles all step statuses correctly
 """
 
 import re
-from engine.logger import log
 
 
 def parse_steps(plan_text: str) -> list:
     """
-    Parses REASON output into a list of step dicts.
+    Parse the REASON output into a list of step dicts.
 
-    Returns:
-        List of dicts with keys: number, description, files, depends_on
-        Returns [] if no structured steps found (caller should fall back).
+    Each step dict:
+      number:           int
+      description:      str
+      files:            list[str]
+      depends_on:       list[str]   (e.g. ["STEP 1", "STEP 2"])
+      success_criteria: str
+      status:           "pending" | "in_progress" | "complete" | "failed"
     """
+    # Split on STEP N: boundaries
+    blocks = re.split(r"(?=STEP\s+\d+\s*:)", plan_text.strip(), flags=re.IGNORECASE)
     steps = []
 
-    # Try structured STEP N: format first
-    # Matches: STEP 1: description (then optional FILES: and DEPENDS_ON: lines)
-    step_pattern = re.compile(
-        r"STEP\s+(\d+)\s*:\s*(.+?)(?=STEP\s+\d+\s*:|$)",
-        re.IGNORECASE | re.DOTALL
-    )
+    for block in blocks:
+        block = block.strip()
+        if not block:
+            continue
 
-    for match in step_pattern.finditer(plan_text):
-        number = int(match.group(1))
-        block  = match.group(2).strip()
+        # Extract step number and description from first line
+        header = re.match(r"STEP\s+(\d+)\s*:\s*(.+)", block, re.IGNORECASE)
+        if not header:
+            continue
 
-        # Extract description (first line of block)
-        lines = [l.strip() for l in block.splitlines() if l.strip()]
-        description = lines[0] if lines else f"Step {number}"
+        number      = int(header.group(1))
+        description = header.group(2).strip()
 
-        # Extract FILES:
-        files = []
+        # FILES:
         files_match = re.search(r"FILES?\s*:\s*(.+)", block, re.IGNORECASE)
-        if files_match:
-            raw = files_match.group(1).strip()
-            files = [f.strip() for f in re.split(r"[,\s]+", raw) if f.strip() and f.lower() != "none"]
+        files_raw   = files_match.group(1).strip() if files_match else ""
+        # Handle comma-separated or space-separated file lists
+        files = [f.strip() for f in re.split(r"[,\s]+", files_raw) if f.strip() and "." in f]
 
-        # Extract DEPENDS_ON:
-        depends_on = []
-        dep_match = re.search(r"DEPENDS_ON\s*:\s*(.+)", block, re.IGNORECASE)
-        if dep_match:
-            raw = dep_match.group(1).strip()
-            if raw.lower() != "none":
-                nums = re.findall(r"\d+", raw)
-                depends_on = [int(n) for n in nums]
+        # DEPENDS_ON:
+        dep_match  = re.search(r"DEPENDS_ON\s*:\s*(.+)", block, re.IGNORECASE)
+        dep_raw    = dep_match.group(1).strip() if dep_match else "none"
+        if dep_raw.lower() in ("none", "n/a", "-", ""):
+            depends_on = []
+        else:
+            depends_on = [d.strip().upper() for d in re.split(r"[,\s]+", dep_raw) if d.strip()]
+
+        # SUCCESS_CRITERIA: (optional — missing field is fine)
+        sc_match         = re.search(r"SUCCESS_CRITERIA\s*:\s*(.+)", block, re.IGNORECASE)
+        success_criteria = sc_match.group(1).strip() if sc_match else ""
 
         steps.append({
-            "number":      number,
-            "description": description,
-            "files":       files,
-            "depends_on":  depends_on,
-            "status":      "pending",
+            "number":           number,
+            "description":      description,
+            "files":            files,
+            "depends_on":       depends_on,
+            "success_criteria": success_criteria,
+            "status":           "pending",
         })
 
-    if steps:
-        log(f"[plan_parser] Parsed {len(steps)} structured steps")
-        return sorted(steps, key=lambda s: s["number"])
-
-    # Fallback: try numbered list  (1. do something / 1) do something)
-    list_pattern = re.compile(r"^\s*(\d+)[.)]\s+(.+)$", re.MULTILINE)
-    for match in list_pattern.finditer(plan_text):
-        number = int(match.group(1))
-        description = match.group(2).strip()
-        steps.append({
-            "number":      number,
-            "description": description,
-            "files":       [],   # unknown — executor will use all context files
-            "depends_on":  [number - 1] if number > 1 else [],
-            "status":      "pending",
-        })
-
-    if steps:
-        log(f"[plan_parser] Parsed {len(steps)} list steps (fallback)")
-        return sorted(steps, key=lambda s: s["number"])
-
-    log("[plan_parser] No structured steps found — caller should use single-step fallback")
-    return []
+    # Sort by step number (in case the model output them out of order)
+    steps.sort(key=lambda s: s["number"])
+    return steps
 
 
 def extract_plan_summary(steps: list) -> str:
     """
-    Produces a compact summary string of the full plan.
-    Used in step prompts so the model knows the overall goal.
+    Compact summary of the full plan — injected into every step prompt
+    so the model knows the big picture while executing one step.
+    Includes success criteria so executor knows what each step should achieve.
     """
     if not steps:
         return "(no structured plan)"
-    lines = [f"Step {s['number']}: {s['description']}" for s in steps]
+
+    lines = []
+    for s in steps:
+        status_icon = {
+            "pending":     "○",
+            "in_progress": "▶",
+            "complete":    "✓",
+            "failed":      "✗",
+        }.get(s.get("status", "pending"), "○")
+
+        line = f"  {status_icon} Step {s['number']}: {s['description']}"
+        if s.get("files"):
+            line += f"  [{', '.join(s['files'])}]"
+        if s.get("success_criteria"):
+            line += f"\n       → {s['success_criteria']}"
+        lines.append(line)
+
     return "\n".join(lines)
 
 
 def steps_to_status_summary(steps: list) -> str:
     """
-    Returns a compact string showing which steps are done vs pending.
-    Used for context compression between steps.
+    One-liner per step showing current status.
+    Shown in every step prompt so the model knows what's already done.
     """
-    completed = [s for s in steps if s["status"] == "complete"]
-    failed    = [s for s in steps if s["status"] == "failed"]
-    pending   = [s for s in steps if s["status"] == "pending"]
-    running   = [s for s in steps if s["status"] == "running"]
-
-    parts = []
-    if completed:
-        nums = [str(s["number"]) for s in completed]
-        descs = "; ".join(s["description"][:40] for s in completed)
-        parts.append(f"COMPLETED steps {', '.join(nums)}: {descs}")
-    if running:
-        s = running[0]
-        parts.append(f"RUNNING step {s['number']}: {s['description']}")
-    if failed:
-        nums = [str(s["number"]) for s in failed]
-        parts.append(f"FAILED steps {', '.join(nums)} (skipped after retry)")
-    if pending:
-        nums = [str(s["number"]) for s in pending]
-        parts.append(f"PENDING steps {', '.join(nums)}")
-    return "\n".join(parts)
+    lines = []
+    for s in steps:
+        status = s.get("status", "pending")
+        icon = {
+            "pending":     "○ PENDING",
+            "in_progress": "▶ IN PROGRESS",
+            "complete":    "✓ DONE",
+            "failed":      "✗ FAILED (skipped)",
+        }.get(status, "○ PENDING")
+        lines.append(f"  Step {s['number']}: {icon} — {s['description']}")
+    return "\n".join(lines)

@@ -1,6 +1,6 @@
 """
 engine/brief.py
-Manages the VIBESTUDIO_BRIEF.md file in the project folder.
+Manages the ZAP_CODEFORGE_BRIEF.md file in the project folder.
 
 The brief is a small structured text file that persists across pipeline runs.
 It tells every stage what the project is, what's been decided, and what to avoid.
@@ -18,7 +18,7 @@ Format (plain markdown, human-editable):
 import os
 from engine.logger import log
 
-BRIEF_FILENAME = "VIBESTUDIO_BRIEF.md"
+BRIEF_FILENAME = "ZAPCODEFORGE_BRIEF.md"
 
 BRIEF_TEMPLATE = """\
 # Project Brief

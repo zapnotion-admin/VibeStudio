@@ -3,23 +3,29 @@ engine/workflow.py
 Agent pipeline: SCAN → REASON → DECOMPOSE → [STEP LOOP] → FINAL REVIEW
 
 Stage model assignments:
-  Scan     — qwen3-coder      Fast file analysis + cross-file consistency
-  Reason   — deepseek-reasoner  Structured step plan with dependencies
-  Execute  — qwen3-coder      One step at a time, re-reads files between steps
-  Review   — qwen3-coder      Final review of all written files
-  Retry    — qwen3-coder      Only if reviewer flags issues (single-shot fallback)
+  Scan     — coder model    Fast file analysis + cross-file consistency
+  Reason   — reasoner model Structured step plan with dependencies
+  Execute  — coder model    One step at a time, re-reads files between steps
+  Review   — coder model    Final review of all written files
+  Retry    — coder model    Only if reviewer flags issues (single-shot fallback)
 
-VRAM discipline:
-  - Only one model in VRAM at a time
-  - Explicit unload_model() before every swap
-  - cancel_check honoured before every stage transition
+v3 fixes:
+  - SCAN: When no context files, truly skips scan (no model call, no hallucination)
+  - SCAN prompt: explicitly asks model to check cross-file references
+    (are JS files referenced in HTML? are imports correct?)
+  - REASON prompt: must keep all changes in fewest possible files;
+    discourages splitting across invented files
+  - REASON prompt: for web projects, warns that JS files must be <script>-linked in HTML
+  - REVIEW: explicitly checks for unreferenced/orphan files
+  - append_run_summary wired after completion
 """
 
 import re
 import os
 from engine.ollama_client import single_response, ensure_model, unload_model, resolve_model
 from engine.logger import log
-from engine.brief import read_brief, format_brief_for_prompt
+from engine.brief import read_brief, format_brief_for_prompt, append_run_summary
+from engine.project_map import build_project_map_section, update_summaries
 from engine.plan_parser import parse_steps, extract_plan_summary
 from engine.step_state import StepState
 from engine.step_executor import run_steps
@@ -27,14 +33,6 @@ from core.config import (
     MODEL_CODER, MODEL_REASONER, MODEL_FALLBACK,
     MAX_CTX_CODER, MAX_CTX_REASONER,
 )
-
-CONSTRAINTS = """
-CONSTRAINTS (follow always):
-- Make minimal changes. Only modify what the task explicitly requires.
-- Do not introduce new dependencies unless asked.
-- Follow the coding style visible in the provided files.
-- Do not modify files outside the stated scope.
-"""
 
 
 def extract_verdict(text: str) -> str:
@@ -54,10 +52,6 @@ def extract_verdict(text: str) -> str:
     return "NEEDS_CHANGES"
 
 
-def extract_code_blocks(text: str) -> list:
-    return re.findall(r"```.*?\n(.*?)```", text, re.DOTALL)
-
-
 def _swap_to(model: str, emit, cancel_check) -> bool:
     if cancel_check():
         return False
@@ -71,22 +65,13 @@ def run_pipeline(
     task:              str,
     file_context:      str,
     project_dir:       str = "",
-    context_files:     list = None,   # list of file paths user has in context
-    coder_model:       str = None,    # override coder model (None = use config default)
-    reasoner_model:    str = None,    # override reasoner model (None = use config default)
+    context_files:     list = None,
+    coder_model:       str = None,
+    reasoner_model:    str = None,
+    stable_mode:       bool = True,
     progress_callback  = None,
     cancel_check:      object = None,
 ) -> dict:
-    """
-    Full agent pipeline.
-
-    progress_callback(stage, text) stages:
-      status, scan_done, plan_done, step_start, step_done, step_failed,
-      code_done, review_done, retry_done
-
-    Returns dict with keys: scan, plan, steps, review, verdict,
-                             final_code, completed_files, diffs
-    """
 
     def emit(stage: str, text: str) -> None:
         log(f"[pipeline] stage={stage} len={len(text)}")
@@ -98,13 +83,21 @@ def run_pipeline(
 
     coder    = resolve_model(coder_model    or MODEL_CODER,    MODEL_FALLBACK)
     reasoner = resolve_model(reasoner_model or MODEL_REASONER, MODEL_FALLBACK)
-    log(f"[pipeline] coder={coder}  reasoner={reasoner}")
+    log(f"[pipeline] coder={coder}  reasoner={reasoner}  stable={stable_mode}")
+
+    mode_label = "⚡ Stable" if stable_mode else "⚡ Fast"
+    emit("status", f"{mode_label} mode  |  Coder: {coder}  |  Reasoner: {reasoner}")
 
     files_section = "FILES:\n" + file_context if file_context else "No files provided."
-    brief_content = read_brief(project_dir) if project_dir else ""
-    brief_section = format_brief_for_prompt(brief_content)
+    brief_content    = read_brief(project_dir) if project_dir else ""
+    brief_section    = format_brief_for_prompt(brief_content)
 
-    # Extract explicit target filename from task if specified
+    project_map_section = build_project_map_section(
+        project_dir, exclude_files=context_files or []
+    ) if project_dir else ""
+    if project_map_section:
+        brief_section = brief_section + "\n" + project_map_section + "\n"
+
     _explicit = re.search(
         r"(?:save (?:it )?as|save to|call it|name it|file(?:name)? (?:is )?)\s+([\w\-]+\.\w+)",
         task, re.IGNORECASE
@@ -118,9 +111,15 @@ def run_pipeline(
     ) if target_file else ""
 
     # ──────────────────────────────────────────────────────────────────
-    # STAGE 1: SCAN (skipped if no files to scan)
+    # STAGE 1: SCAN
+    # Only runs when there are actual files to scan.
+    # If skipped, scan = sentinel string — no model call, no hallucination.
     # ──────────────────────────────────────────────────────────────────
-    has_files = bool(file_context and file_context.strip() and file_context != "No files provided.")
+    has_files = bool(
+        file_context
+        and file_context.strip()
+        and file_context.strip() != "No files provided."
+    )
 
     if has_files:
         emit("status", "🔍 Scanning files...")
@@ -128,74 +127,100 @@ def run_pipeline(
         if is_cancelled():
             return {}
 
+        # Build list of context file names for the cross-reference check
+        ctx_filenames = [os.path.basename(f) for f in (context_files or [])]
+        ctx_list = ", ".join(ctx_filenames) if ctx_filenames else "(none listed)"
+
         scan_prompt = f"""
 TASK: {task}{target_instruction}
 {brief_section}{files_section}
 
-You are a code scanner reviewing EXISTING files listed above.
-Do NOT invent issues for files that do not exist yet.
-Only report issues you can see in the actual code shown.
-Be concise — maximum 15 lines total.
+You are a code scanner. Your job is to find REAL problems in the existing files above.
 
-For each real issue found:
-- File: <filename> | Issue: <one line description>
-- Mark cross-file issues [CROSS-FILE]
+IMPORTANT: Check these specific things:
+1. Logic bugs visible in the code (wrong variable names, off-by-one errors, etc.)
+2. Cross-file references: if file A imports or uses file B, does file B exist and export what's needed?
+3. For HTML projects: are all JavaScript files referenced via <script src="..."> tags?
+   Context files provided: {ctx_list}
+   Flag any JS files that contain game/app logic but are NOT linked in the HTML.
+4. Duplicate or contradictory logic across files
 
-If the files look correct for the task, output: "No issues found."
+Be concise — maximum 15 lines. Only report issues you can see in the actual code.
+Format: "File: <name> | Issue: <one line>"
+Mark cross-file issues [CROSS-FILE].
+If everything looks correct for the task: output "No issues found."
 """.strip()
 
         scan = single_response(coder, scan_prompt, num_ctx=MAX_CTX_CODER)
         emit("scan_done", scan)
     else:
-        # No files — skip scan entirely, no model call
         scan = "(No existing files — creating from scratch)"
         emit("status", "⏭ No files to scan — proceeding to plan...")
 
     # ──────────────────────────────────────────────────────────────────
-    # STAGE 2: REASON — produces structured step plan
+    # STAGE 2: REASON
     # ──────────────────────────────────────────────────────────────────
     emit("status", "🧠 Reasoning...")
     if not _swap_to(reasoner, emit, is_cancelled):
         return {}
 
+    # Build the authoritative file list from context (what files actually exist/are relevant)
+    ctx_filenames = [os.path.basename(f) for f in (context_files or [])]
+    if ctx_filenames:
+        file_inventory = (
+            "EXISTING FILES IN PROJECT (only modify these unless you must create a new one):\n"
+            + "\n".join(f"  - {f}" for f in ctx_filenames)
+            + "\n"
+        )
+    else:
+        file_inventory = ""
+
     reason_prompt = f"""
 TASK: {task}{target_instruction}
 {brief_section}
-SCAN FINDINGS: {scan}
+{file_inventory}SCAN FINDINGS: {scan}
 
-Break this task into 4-8 small steps. Each step = one logical unit (20-50 lines max).
+Break this task into 4-8 steps. Each step = one logical unit of work.
+Aim for 30-80 lines of code change per step.
 
-Use EXACTLY this format — nothing else:
+CRITICAL FILE RULES:
+- Prefer modifying existing files over creating new ones.
+- If you create a new .js file, it MUST be <script src="..."> linked in the HTML in the same plan.
+- Do NOT plan steps that write to files that will not be used anywhere.
+- Each FILE: must be a file that will actually be part of the running project.
+- Consolidate logic: one HTML file + one JS file is better than one HTML + three JS files.
 
-STEP 1: <one clear sentence>
-FILES: <filename>
+Use EXACTLY this format for EVERY step:
+
+STEP 1: <one clear action sentence>
+FILES: <filename.ext>
 DEPENDS_ON: none
+SUCCESS_CRITERIA: <one observable outcome>
 
-STEP 2: <one clear sentence>
-FILES: <filename>
+STEP 2: <one clear action sentence>
+FILES: <filename.ext>
 DEPENDS_ON: STEP 1
+SUCCESS_CRITERIA: <one observable outcome>
 
 Rules:
-- New project: step 1 creates skeleton, later steps add features one at a time
-- Modifications: step 1 fixes most critical issue first
-- Each step must be independently testable
-- Do not include explanations outside the STEP blocks
+- Output ONLY the STEP blocks — no preamble, no summary
+- Each step touches the MINIMUM number of files needed
+- New project: step 1 = skeleton only, later steps add features
+- SUCCESS_CRITERIA must be specific and observable
 """.strip()
 
     plan = single_response(reasoner, reason_prompt, num_ctx=MAX_CTX_REASONER)
     emit("plan_done", plan)
 
     # ──────────────────────────────────────────────────────────────────
-    # STAGE 3: DECOMPOSE — parse steps, no model call
+    # STAGE 3: DECOMPOSE
     # ──────────────────────────────────────────────────────────────────
     steps = parse_steps(plan)
 
-    # Swap back to coder for execution
     if not _swap_to(coder, emit, is_cancelled):
         return {}
 
     if not steps:
-        # Fallback: single-step execution (old behaviour)
         log("[pipeline] No structured steps — falling back to single-step")
         emit("status", "⚙️ Writing code (single pass)...")
         return _single_step_fallback(
@@ -222,6 +247,7 @@ Rules:
         project_dir       = project_dir,
         brief_content     = brief_content,
         coder_model       = coder,
+        stable_mode       = stable_mode,
         progress_callback = progress_callback,
         cancel_check      = cancel_check,
     )
@@ -240,14 +266,13 @@ Rules:
         emit("status", f"⚠️ {len(failed_steps)} step(s) skipped: {failed_steps}")
 
     # ──────────────────────────────────────────────────────────────────
-    # STAGE 5: FINAL REVIEW — review all written files together
+    # STAGE 5: FINAL REVIEW
     # ──────────────────────────────────────────────────────────────────
     if is_cancelled():
         return {}
 
     emit("status", "✅ Final review...")
 
-    # Read all written files for the review
     final_file_content = ""
     for fpath in completed_files:
         if os.path.exists(fpath):
@@ -260,7 +285,14 @@ Rules:
                 pass
 
     if not final_file_content:
-        final_file_content = file_context  # fall back to original context
+        final_file_content = file_context
+
+    # Build list of all written files for cross-reference check
+    written_filenames = [
+        os.path.relpath(f, project_dir) if project_dir else f
+        for f in completed_files if os.path.exists(f)
+    ]
+    written_list = "\n".join(f"  - {f}" for f in written_filenames) or "  (none)"
 
     review_prompt = f"""
 You are a code reviewer. Review this AI-generated code.
@@ -269,23 +301,24 @@ ORIGINAL TASK: {task}
 PLAN:
 {extract_plan_summary(steps)}
 
+FILES WRITTEN BY THE PIPELINE:
+{written_list}
+
 CODE OUTPUT:
 {final_file_content}
 
 Check ALL of the following:
 - Correctness: does the code do what the task asks?
-- Logic errors: off-by-one, wrong conditions, incorrect operator precedence
-- Function signatures: does every function definition match exactly how it is called?
-  Pay special attention to callback/handler functions registered with frameworks
-  (e.g. tkinter validatecommand requires specific argument patterns)
-- Dead code: is every defined function actually called somewhere? Flag unused functions.
-- Cross-file consistency: if multiple files are present, do they agree on data formats,
-  allowed values, and interfaces? (e.g. if one file validates input to a set of values,
-  the other file must produce/accept exactly those values)
+- Logic errors: wrong variable names, off-by-one, incorrect conditions
+- Function signatures: every definition must match how it is called
+- Dead code: every defined function must be called somewhere; flag unused ones
+- Orphan files: are ALL written files actually used/referenced?
+  For HTML projects: every .js file must have a matching <script src="..."> in the HTML.
+  If a .js file exists but is not linked, that is a critical issue.
+- Cross-file consistency: files must agree on data formats and interfaces
 - Missing error handling: unhandled exceptions, missing edge cases
-- Security issues: unsafe eval, injection risks, path traversal
 
-Respond in this exact format:
+Respond in this EXACT format:
 VERDICT: PASS / NEEDS_CHANGES / FAIL
 ISSUES: (list each issue on its own line, or "None")
 SUGGESTIONS: (specific improvements, or "None")
@@ -296,7 +329,7 @@ SUGGESTIONS: (specific improvements, or "None")
     emit("review_done", f"VERDICT: {verdict}\n\n{review}")
 
     # ──────────────────────────────────────────────────────────────────
-    # STAGE 6: RETRY — only if reviewer flagged issues
+    # STAGE 6: RETRY
     # ──────────────────────────────────────────────────────────────────
     final_code = final_file_content
 
@@ -326,8 +359,8 @@ You MUST output ALL of the following files in their COMPLETE corrected form:
 
 Use this STRICT format for EVERY file:
 
-FILE: filename.py
-```python
+FILE: filename.ext
+```language
 <complete file contents — every line, no omissions>
 ```
 
@@ -336,11 +369,11 @@ Rules:
 - Complete file contents only — never partial, never snippets
 - No explanations outside the FILE blocks
 - If a file needs no changes, output it anyway unchanged
+- Do NOT create additional files beyond those listed
 """.strip()
 
         retry_output = single_response(coder, retry_prompt, num_ctx=MAX_CTX_CODER)
 
-        # Only use retry if it produced proper FILE: blocks matching what we had
         import re as _re
         retry_count = len(_re.findall(r"FILE:\s*[^\n]+\n```", retry_output))
         code_count  = len(_re.findall(r"FILE:\s*[^\n]+\n```", final_file_content))
@@ -349,7 +382,14 @@ Rules:
             emit("retry_done", retry_output)
         else:
             log(f"[pipeline] retry had {retry_count} FILE: blocks vs {code_count} — keeping original")
-            emit("retry_done", f"(Retry did not improve output — keeping reviewed version)")
+            emit("retry_done", "(Retry did not improve output — keeping reviewed version)")
+
+    if completed_files and project_dir:
+        update_summaries(project_dir, completed_files)
+
+    if project_dir:
+        rel_files = [os.path.relpath(f, project_dir) for f in completed_files if os.path.exists(f)]
+        append_run_summary(project_dir, task, rel_files, verdict)
 
     log(f"[pipeline] completed. verdict={verdict} files={len(completed_files)}")
     return {
@@ -369,11 +409,6 @@ def _single_step_fallback(
     target_instruction, coder, emit, is_cancelled,
     project_dir, context_files
 ) -> dict:
-    """
-    Original single-shot code generation.
-    Used when the REASON stage doesn't produce structured steps.
-    Preserves backward compatibility.
-    """
     emit("status", "⚙️ Writing code...")
 
     files_section = "FILES:\n" + file_context if file_context else ""
@@ -387,16 +422,17 @@ EXECUTION PLAN:
 
 Execute the plan exactly. Output EVERY changed or created file using this STRICT format:
 
-FILE: relative/path/to/file.py
-```python
+FILE: relative/path/to/file.ext
+```language
 <complete file contents here>
 ```
 
 Rules:
 - Always use the FILE: line before each code block
 - Always show the COMPLETE file — never partial or diff output
-- Use the correct language tag (python, js, etc.)
+- Use the correct language tag (python, javascript, html, etc.)
 - No explanations outside the FILE blocks
+- Do NOT create additional files beyond what the plan requires
 
 Write production-quality code. Do not deviate from the plan.
 """.strip()
@@ -412,7 +448,8 @@ PLAN: {plan}
 CODE OUTPUT: {code}
 
 Check: correctness, logic errors, dead code, cross-file consistency,
-function signatures vs call sites, missing error handling, security issues.
+function signatures vs call sites, missing error handling, orphan files
+(JS files not referenced via <script> in HTML).
 
 VERDICT: PASS / NEEDS_CHANGES / FAIL
 ISSUES: (list, or "None")
@@ -426,7 +463,6 @@ SUGGESTIONS: (specific improvements, or "None")
     final_code = code
     if verdict in ("NEEDS_CHANGES", "FAIL") and not is_cancelled():
         emit("status", "🔁 Fixing...")
-        from engine.apply_changes import extract_files as _ef
         code_files = re.findall(r"FILE:\s*([^\n]+)\n```", code)
         file_list = "\n".join(f"- FILE: {f.strip()}" for f in code_files) if code_files else ""
 
@@ -438,8 +474,8 @@ FEEDBACK: {review}
 PREVIOUS CODE: {code}
 REQUIRED FILES: {file_list}
 
-FILE: filename.py
-```python
+FILE: filename.ext
+```language
 <complete file>
 ```
 """.strip()

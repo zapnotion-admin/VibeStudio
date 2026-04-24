@@ -110,7 +110,8 @@ class PipelineWorker(QObject):
     error_occurred = Signal(str)
 
     def __init__(self, task: str, file_context: str, project_dir: str = "",
-                 context_files: list = None, coder_model: str = "", reasoner_model: str = ""):
+                 context_files: list = None, coder_model: str = "",
+                 reasoner_model: str = "", stable_mode: bool = True):
         super().__init__()
         self.task           = task
         self.file_context   = file_context
@@ -118,6 +119,7 @@ class PipelineWorker(QObject):
         self.context_files  = context_files or []
         self.coder_model    = coder_model
         self.reasoner_model = reasoner_model
+        self.stable_mode    = stable_mode
         self._cancelled     = False
         self.result         = {}
 
@@ -139,6 +141,7 @@ class PipelineWorker(QObject):
                 context_files=self.context_files,
                 coder_model=self.coder_model or None,
                 reasoner_model=self.reasoner_model or None,
+                stable_mode=self.stable_mode,
                 progress_callback=callback,
                 cancel_check=lambda: self._cancelled,
             )
@@ -156,7 +159,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VibeStudio")
+        self.setWindowTitle("⚡ Zap CodeForge")
         self.resize(1200, 800)
 
         # ── app state ────────────────────────────────────────────────
@@ -176,7 +179,7 @@ class MainWindow(QMainWindow):
         self._check_ollama_status()
 
         # [perf] Idle VRAM release — unloads model after 60s of inactivity.
-        # Keeps the system responsive when VibeStudio is open but not in use.
+        # Keeps the system responsive when Zap CodeForge is open but not in use.
         from PySide6.QtCore import QTimer
         from engine.ollama_client import unload_model
         self._idle_timer = QTimer(self)
@@ -242,6 +245,7 @@ class MainWindow(QMainWindow):
         self.sidebar.edit_brief_requested.connect(self._on_edit_brief)
         self.sidebar.coder_changed.connect(self._on_coder_changed)
         self.sidebar.reasoner_changed.connect(self._on_reasoner_changed)
+        self.sidebar.stable_mode_changed.connect(self._on_stable_mode_changed)
 
         # InputPanel → MainWindow
         self.input_panel.send_requested.connect(self._handle_send)
@@ -317,6 +321,7 @@ class MainWindow(QMainWindow):
         self._worker = PipelineWorker(
             task, file_context, self._project_dir, self._context_files,
             coder_model=coder_model, reasoner_model=reasoner_model,
+            stable_mode=self.sidebar.stable_mode_enabled(),
         )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -551,7 +556,7 @@ class MainWindow(QMainWindow):
         if not brief_exists(path):
             create_default_brief(path)
             self.chat_panel.add_system_message(
-                f"Created VIBESTUDIO_BRIEF.md in project folder — edit it to give the AI persistent context.",
+                f"Created ZAP_CODEFORGE_BRIEF.md in project folder — edit it to give the AI persistent context.",
                 level="info",
             )
 
@@ -626,7 +631,7 @@ class MainWindow(QMainWindow):
     # ----------------------------------------------------------------
 
     def _on_edit_brief(self) -> None:
-        """Opens a simple dialog to edit VIBESTUDIO_BRIEF.md."""
+        """Opens a simple dialog to edit ZAP_CODEFORGE_BRIEF.md."""
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton, QLabel
         from engine.brief import read_brief, write_brief, brief_path, create_default_brief
 
@@ -677,6 +682,13 @@ class MainWindow(QMainWindow):
         cancel_btn.clicked.connect(dlg.reject)
         dlg.exec()
 
+    def _on_stable_mode_changed(self, enabled: bool) -> None:
+        from core import config as _cfg
+        _cfg.STABLE_MODE = enabled
+        mode = "Stable" if enabled else "Fast"
+        self._status_bar.showMessage(f"Execution mode: {mode}")
+        log(f"[main_window] Stable mode: {enabled}")
+
     def _on_coder_changed(self, model: str) -> None:
         log(f"[main_window] Coder model: {model}")
 
@@ -690,7 +702,7 @@ class MainWindow(QMainWindow):
         else:
             self._status_bar.showMessage("Ollama not detected — start Ollama then restart")
             self.chat_panel.add_system_message(
-                "Ollama is not running. Start Ollama and relaunch VibeStudio.", level="warn"
+                "Ollama is not running. Start Ollama and relaunch Zap CodeForge.", level="warn"
             )
 
     # ----------------------------------------------------------------
